@@ -2,7 +2,7 @@
 
 set -euo pipefail
 
-VERSION="1.5.0"
+VERSION="1.6.0"
 REPO="skosari/killport-mac"
 RAW="https://raw.githubusercontent.com/${REPO}/main"
 ANCHOR_FILE="/etc/pf.anchors/killport"
@@ -90,6 +90,42 @@ status_port() {
   fi
 }
 
+open_ports() {
+  echo "Open ports (allowed external access via killport):"
+  echo ""
+  if [ ! -f "$ANCHOR_FILE" ] || [ ! -s "$ANCHOR_FILE" ]; then
+    echo "  None — no ports have been opened with killport."
+    return
+  fi
+  grep -oE 'port [0-9]+' "$ANCHOR_FILE" | awk '{print $2}' | sort -un | while read -r port; do
+    local PIDS NAME
+    PIDS=$(lsof -ti :"$port" 2>/dev/null || true)
+    if [ -n "$PIDS" ]; then
+      NAME=$(echo "$PIDS" | xargs -I{} ps -p {} -o comm= 2>/dev/null | head -1 || true)
+      printf "  %-8s  listening  (%s)\n" "$port" "$NAME"
+    else
+      printf "  %-8s  not listening\n" "$port"
+    fi
+  done
+}
+
+closed_ports() {
+  echo "Closed ports (listening locally, no external access):"
+  echo ""
+  local open_list=""
+  if [ -f "$ANCHOR_FILE" ] && [ -s "$ANCHOR_FILE" ]; then
+    open_list=$(grep -oE 'port [0-9]+' "$ANCHOR_FILE" | awk '{print $2}' | sort -un | tr '\n' ' ')
+  fi
+  lsof -iTCP -sTCP:LISTEN -P -n 2>/dev/null | awk 'NR>1 {print $9}' \
+    | grep -oE '[0-9]+$' | sort -un | while read -r port; do
+    if ! echo " $open_list " | grep -q " $port "; then
+      local NAME
+      NAME=$(lsof -ti :"$port" 2>/dev/null | xargs -I{} ps -p {} -o comm= 2>/dev/null | head -1 || true)
+      printf "  %-8s  closed  (%s)\n" "$port" "$NAME"
+    fi
+  done
+}
+
 show_ip() {
   echo "Network Interfaces"
   echo "────────────────────────────────────"
@@ -140,7 +176,9 @@ if [ $# -eq 0 ]; then
   echo "  killport list              list all listening ports"
   echo "  killport open <port>       open a port to external connections"
   echo "  killport close <port>      close a port from external connections"
-  echo "  killport status <port>      show if a port is open or closed"
+  echo "  killport openports         show all ports open to external access"
+  echo "  killport closedports       show all listening ports with no external access"
+  echo "  killport status <port>     show if a port is open or closed"
   echo "  killport ip                show IP addresses, DNS, and network info"
   echo "  killport update            update to the latest version"
   echo ""
@@ -168,6 +206,14 @@ case "$1" in
 
   list)
     list_ports
+    ;;
+
+  openports)
+    open_ports
+    ;;
+
+  closedports)
+    closed_ports
     ;;
 
   status)
