@@ -4,12 +4,20 @@ set -euo pipefail
 
 usage() {
   echo "Usage: killport <port>"
-  echo "       killport 8080"
+  echo "       killport list"
   exit 1
 }
 
 if [ $# -eq 0 ]; then
   usage
+fi
+
+# --- list all listening ports ---
+if [ "$1" = "list" ]; then
+  echo "Listening ports:"
+  echo ""
+  lsof -iTCP -iUDP -sTCP:LISTEN -P -n 2>/dev/null | awk 'NR>1 {printf "  %-8s %-10s %-10s %s\n", $9, $1, $2, $8}' | sort -t: -k2 -n
+  exit 0
 fi
 
 PORT="$1"
