@@ -375,11 +375,32 @@ if [ $# -eq 0 ]; then
   echo "  killport status <port>     show if a port is open or closed"
   echo "  killport ip                show IP addresses, DNS, and network info"
   echo "  killport update            update to the latest version"
+  echo "  killport uninstall         remove killport and all firewall rules"
   echo ""
   exit 0
 fi
 
 case "$1" in
+
+  uninstall)
+    echo "Uninstalling killport..."
+    INSTALL_PATH=$(command -v killport)
+    if [ -f "$INSTALL_PATH" ]; then
+      sudo rm "$INSTALL_PATH"
+      echo "  Removed $INSTALL_PATH"
+    fi
+    if [ -f /etc/pf.anchors/killport ]; then
+      sudo rm /etc/pf.anchors/killport
+      echo "  Removed /etc/pf.anchors/killport"
+    fi
+    if sudo grep -q 'killport' /etc/pf.conf 2>/dev/null; then
+      sudo sed -i '' '/anchor "killport"/d' /etc/pf.conf
+      sudo sed -i '' '/load anchor "killport"/d' /etc/pf.conf
+      sudo pfctl -f /etc/pf.conf 2>/dev/null || true
+      echo "  Cleaned pf.conf"
+    fi
+    echo "killport uninstalled."
+    ;;
 
   update)
     echo "Checking for updates..."

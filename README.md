@@ -60,6 +60,7 @@ sudo curl -fsSL https://raw.githubusercontent.com/skosari/killport-mac/main/kill
 | `killport status <port>` | Show if a port is open or closed |
 | `killport ip` | Show IP addresses, DNS, and network info |
 | `killport update` | Update to the latest version |
+| `killport uninstall` | Remove killport and all firewall rules |
 
 ---
 
@@ -201,6 +202,15 @@ Port 8080 is now closed.
 ```
 Checking for updates...
 Already up to date (v1.6.6)
+```
+
+### `killport uninstall`
+```
+Uninstalling killport...
+  Removed /usr/local/bin/killport
+  Removed /etc/pf.anchors/killport
+  Cleaned pf.conf
+killport uninstalled.
 ```
 
 ---
