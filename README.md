@@ -42,18 +42,8 @@ sudo curl -fsSL https://raw.githubusercontent.com/skosari/killport-mac/main/kill
 ## Usage
 
 ```sh
-killport <port>     # kill whatever is on that port
-killport list       # list all listening ports
-```
-
-### killport list
-
-```sh
-killport list
-# Listening ports:
-#
-#   *:3847      node        87078      TCP
-#   *:5000      ControlCe   1045       TCP
-#   *:7000      ControlCe   1045       TCP
-#   127.0.0.1:52081  node   82545      TCP
+killport              # show instructions and list all listening ports
+killport <port>       # kill whatever is on that port
+killport list         # list all listening ports
+killport update       # update to the latest version
 ```
