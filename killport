@@ -2,7 +2,7 @@
 
 set -euo pipefail
 
-VERSION="1.6.3"
+VERSION="1.6.4"
 REPO="skosari/killport-mac"
 RAW="https://raw.githubusercontent.com/${REPO}/main"
 ANCHOR_FILE="/etc/pf.anchors/killport"
@@ -22,7 +22,7 @@ banner() {
 
 check_update() {
   local remote
-  remote=$(curl -fsSL --max-time 2 "${RAW}/VERSION" 2>/dev/null | tr -d '[:space:]' || true)
+  remote=$(curl -fsSL --max-time 2 -H "Cache-Control: no-cache" -H "Pragma: no-cache" "${RAW}/VERSION" 2>/dev/null | tr -d '[:space:]' || true)
   if [ -n "$remote" ] && [ "$remote" != "$VERSION" ]; then
     echo "  Update available: $VERSION → $remote  (run: killport update)"
     echo ""
@@ -215,15 +215,15 @@ case "$1" in
 
   update)
     echo "Checking for updates..."
-    remote=$(curl -fsSL --max-time 5 "${RAW}/VERSION" 2>/dev/null | tr -d '[:space:]' || true)
+    remote=$(curl -fsSL --max-time 5 -H "Cache-Control: no-cache" -H "Pragma: no-cache" "${RAW}/VERSION" 2>/dev/null | tr -d '[:space:]' || true)
     if [ -z "$remote" ]; then echo "Could not reach GitHub. Check your connection."; exit 1; fi
     if [ "$remote" = "$VERSION" ]; then echo "Already up to date (v${VERSION})"; exit 0; fi
     echo "Updating $VERSION → $remote..."
     INSTALL_PATH=$(command -v killport)
     if [ -w "$INSTALL_PATH" ]; then
-      curl -fsSL "${RAW}/killport" -o "$INSTALL_PATH" && chmod +x "$INSTALL_PATH"
+      curl -fsSL -H "Cache-Control: no-cache" -H "Pragma: no-cache" "${RAW}/killport" -o "$INSTALL_PATH" && chmod +x "$INSTALL_PATH"
     else
-      sudo curl -fsSL "${RAW}/killport" -o "$INSTALL_PATH" && sudo chmod +x "$INSTALL_PATH"
+      sudo curl -fsSL -H "Cache-Control: no-cache" -H "Pragma: no-cache" "${RAW}/killport" -o "$INSTALL_PATH" && sudo chmod +x "$INSTALL_PATH"
     fi
     echo "Updated to v${remote}. Run killport to confirm."
     ;;
