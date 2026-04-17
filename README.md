@@ -20,21 +20,6 @@
 
 ---
 
-```
-$ killport 3000
-
-Port 3000 is in use:
-
-  PID:     48291
-  User:    siamak
-  Name:    node
-  Command: node server.js
-
-Killed.
-```
-
----
-
 ## Install
 
 **Option 1 — Homebrew** *(recommended)*
@@ -78,50 +63,163 @@ sudo curl -fsSL https://raw.githubusercontent.com/skosari/killport-mac/main/kill
 
 ---
 
-## Port Inspector
+## Examples
 
+### `killport 3000`
 ```
-$ killport ports
+  Port 3000 is in use:
 
+  PID:     48291
+  User:    sam
+  Name:    node
+  Command: node server.js
+
+Killed.
+```
+
+### `killport list`
+```
+  ●  *:3000          node        48291    IPv6
+  ●  *:5432          postgres    312      IPv4
+  ●  *:8080          nginx       1024     IPv4
+  ●  127.0.0.1:6379  redis       2048     IPv4
+```
+
+### `killport open 8080`
+```
+Opening port 8080 to external connections...
+Port 8080 is now open (TCP + UDP).
+```
+
+### `killport close 8080`
+```
+Closing port 8080 from external connections...
+Port 8080 is now closed.
+```
+
+### `killport openports`
+```
+  Firewall-Open Ports  (external access via killport)
+  ────────────────────────────────────────────
+
+  ●  80        listening   nginx
+  ●  443       listening   nginx
+  ○  8080      not listening
+
+  ────────────────────────────────────────────
+  3 port(s) open  ·  2 listening
+```
+
+### `killport closedports`
+```
+  Locally-Listening Ports  (no external access)
+  ────────────────────────────────────────────
+
+  ◆  3000      local only   node
+  ◆  5432      local only   postgres
+  ◆  6379      local only   redis
+
+  ────────────────────────────────────────────
+  3 port(s) listening locally  ·  no external access
+```
+
+### `killport ports`
+```
   Port Inspector  (local view — what this machine sees)
-  ────────────────────────────────────────────────────
+  ────────────────────────────────────────────
 
-  Firewall  DISABLED  pfctl is off — all listening ports may be reachable
+  Firewall  ENABLED   pfctl is active
   LAN IP    192.168.1.42
 
   PORT      PROCESS         ACCESS
   ────────  ──────────────  ──────────
-  ◆  3000    node            likely open  (firewall off)
-  ◆  5432    postgres        likely open  (firewall off)
-  ○  8080    nginx           blocked
+  ●  80       nginx           open         (killport rule)
+  ●  443      nginx           open         (killport rule)
+  ○  3000     node            blocked
+  ○  5432     postgres        blocked
 
-  To truly verify external reachability, run from another machine:
+  ────────────────────────────────────────────
+  4 port(s) listening  ·  2 open to external access
+
+  This is only what the local machine reports. To truly verify
+  external reachability, run from another machine:
   killport opencheck 192.168.1.42
 ```
 
-## External Port Check
-
+### `killport opencheck 192.168.1.42`
 ```
-$ killport opencheck 192.168.1.42
-
   External Port Check  → 192.168.1.42
-  ────────────────────────────────────
+  ────────────────────────────────────────────
 
   ●  22        open   ssh
-  ●  3000      open   http
+  ●  80        open   http
+  ●  443       open   https
 
-  2 open port(s) found · scanned 30 common ports via nmap
+  ────────────────────────────────────────────
+  3 open port(s) found  ·  scanned 30 common ports via nmap
+```
+
+### `killport status 3000`
+```
+  Port 3000 status:
+
+  Firewall:  CLOSED  (no killport rule — external access blocked)
+  Listening: YES  (PID: 48291 — node)
+```
+
+### `killport ip`
+```
+  Network Interfaces
+  ────────────────────────────────────
+
+  Interface: utun3
+  IPv4:      10.8.0.2
+
+  ┌─────────────────────────────────────────┐
+  │  Interface: en0                          │
+  │  MAC:       f8:ff:c2:1a:4b:9d           │
+  │  Status:    active                       │
+  │  IPv4:      192.168.1.42                │
+  └─────────────────────────────────────────┘
+
+  Default Gateway
+  ────────────────────────────────────
+  192.168.1.1
+
+  DNS Servers
+  ────────────────────────────────────
+  8.8.8.8
+  8.8.4.4
+
+  Firewall-managed ports (killport)
+  ────────────────────────────────────
+  80
+  443
+```
+
+### `killport update`
+```
+Checking for updates...
+Already up to date (v1.6.6)
 ```
 
 ---
 
-## Update
+## Uninstall
 
+**Homebrew:**
 ```sh
-killport update
+brew uninstall killport
+brew untap skosari/killport-mac
 ```
 
-Self-updates by pulling the latest script from this repo. Version is checked via the GitHub API — no CDN caching issues.
+**curl / manual install:**
+```sh
+sudo rm /usr/local/bin/killport
+sudo rm -f /etc/pf.anchors/killport
+```
+
+> The second line removes firewall rules created by `killport open`. Skip it if you never used that command.
 
 ---
 
