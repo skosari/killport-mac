@@ -209,17 +209,15 @@ Already up to date (v1.6.6)
 
 **Homebrew:**
 ```sh
-brew uninstall killport
-brew untap skosari/killport-mac
+brew uninstall killport && brew untap skosari/killport-mac
 ```
 
 **curl / manual install:**
 ```sh
-sudo rm /usr/local/bin/killport
-sudo rm -f /etc/pf.anchors/killport
+curl -fsSL https://raw.githubusercontent.com/skosari/killport-mac/main/uninstall.sh | bash
 ```
 
-> The second line removes firewall rules created by `killport open`. Skip it if you never used that command.
+Removes the binary and all pfctl firewall rules created by `killport open`.
 
 ---
 
