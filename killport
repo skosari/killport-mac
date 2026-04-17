@@ -66,7 +66,7 @@ close_port() {
   echo "Port $PORT is now closed."
 }
 
-which_port() {
+status_port() {
   local PORT=$1
   echo "Port $PORT status:"
   echo ""
@@ -140,7 +140,7 @@ if [ $# -eq 0 ]; then
   echo "  killport list              list all listening ports"
   echo "  killport open <port>       open a port to external connections"
   echo "  killport close <port>      close a port from external connections"
-  echo "  killport which <port>      show if a port is open or closed"
+  echo "  killport status <port>      show if a port is open or closed"
   echo "  killport ip                show IP addresses, DNS, and network info"
   echo "  killport update            update to the latest version"
   echo ""
@@ -170,10 +170,10 @@ case "$1" in
     list_ports
     ;;
 
-  which)
-    [ -z "${2:-}" ] && { echo "Usage: killport which <port>"; exit 1; }
+  status)
+    [ -z "${2:-}" ] && { echo "Usage: killport status <port>"; exit 1; }
     [[ "$2" =~ ^[0-9]+$ ]] && [ "$2" -ge 1 ] && [ "$2" -le 65535 ] || { echo "Error: '$2' is not a valid port number (1–65535)"; exit 1; }
-    which_port "$2"
+    status_port "$2"
     ;;
 
   ip)
