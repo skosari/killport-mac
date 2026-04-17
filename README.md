@@ -11,7 +11,7 @@
 
 **Kill whatever is running on a port — macOS**
 
-[![Version](https://img.shields.io/badge/version-1.6.6-00b4d8?style=flat-square)](#)
+[![Version](https://img.shields.io/badge/version-1.6.7-00b4d8?style=flat-square)](#)
 [![Platform](https://img.shields.io/badge/platform-macOS-00b4d8?style=flat-square&logo=apple&logoColor=white)](#)
 [![Shell](https://img.shields.io/badge/shell-bash-00b4d8?style=flat-square&logo=gnubash&logoColor=white)](#)
 [![License](https://img.shields.io/badge/license-MIT-00b4d8?style=flat-square)](#)
