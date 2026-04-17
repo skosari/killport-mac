@@ -2,7 +2,7 @@
 
 set -euo pipefail
 
-VERSION="1.6.0"
+VERSION="1.6.1"
 REPO="skosari/killport-mac"
 RAW="https://raw.githubusercontent.com/${REPO}/main"
 ANCHOR_FILE="/etc/pf.anchors/killport"
