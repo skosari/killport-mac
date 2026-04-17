@@ -183,7 +183,6 @@ if [ $# -eq 0 ]; then
   echo "  killport update            update to the latest version"
   echo ""
   check_update
-  list_ports
   exit 0
 fi
 
