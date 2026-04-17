@@ -2,14 +2,21 @@
 
 set -euo pipefail
 
-VERSION="1.6.4"
+VERSION="1.6.6"
 REPO="skosari/killport-mac"
 RAW="https://raw.githubusercontent.com/${REPO}/main"
+API="https://api.github.com/repos/${REPO}/contents"
 ANCHOR_FILE="/etc/pf.anchors/killport"
+
+fetch_remote_version() {
+  curl -fsSL --max-time "${1:-3}" "${API}/VERSION" 2>/dev/null \
+    | grep '"content"' | awk -F'"' '{print $4}' | tr -d '\\n' | base64 -D | tr -d '[:space:]' || true
+}
 
 banner() {
   local C=$'\033[0;36m'
   local R=$'\033[0m'
+  local D=$'\033[2m'
   printf "%s\n" \
     "${C}██╗  ██╗██╗██╗     ██╗     ██████╗  ██████╗ ██████╗ ████████╗${R}" \
     "${C}██║ ██╔╝██║██║     ██║     ██╔══██╗██╔═══██╗██╔══██╗╚══██╔══╝${R}" \
@@ -18,15 +25,8 @@ banner() {
     "${C}██║  ██╗██║███████╗███████╗██║     ╚██████╔╝██║  ██╗   ██║   ${R}" \
     "${C}╚═╝  ╚═╝╚═╝╚══════╝╚══════╝╚═╝      ╚═════╝ ╚═╝  ╚═╝   ╚═╝   ${R}"
   printf "\n"
-}
-
-check_update() {
-  local remote
-  remote=$(curl -fsSL --max-time 2 -H "Cache-Control: no-cache" -H "Pragma: no-cache" "${RAW}/VERSION" 2>/dev/null | tr -d '[:space:]' || true)
-  if [ -n "$remote" ] && [ "$remote" != "$VERSION" ]; then
-    echo "  Update available: $VERSION → $remote  (run: killport update)"
-    echo ""
-  fi
+  printf "  ${D}https://github.com/skosari/killport-mac${R}\n"
+  printf "\n"
 }
 
 list_ports() {
@@ -91,39 +91,200 @@ status_port() {
 }
 
 open_ports() {
-  echo "Open ports (allowed external access via killport):"
-  echo ""
+  local C=$'\033[0;36m'
+  local G=$'\033[0;32m'
+  local Y=$'\033[0;33m'
+  local D=$'\033[2m'
+  local B=$'\033[1m'
+  local R=$'\033[0m'
+
+  printf "\n${B}${C}  Firewall-Open Ports${R}  ${D}(external access via killport)${R}\n"
+  printf "${C}  ────────────────────────────────────────────${R}\n\n"
+
   if [ ! -f "$ANCHOR_FILE" ] || [ ! -s "$ANCHOR_FILE" ]; then
-    echo "  None — no ports have been opened with killport."
+    printf "  ${D}No ports are currently open to external access.${R}\n"
+    printf "  ${D}Run: killport open <port>${R}\n\n"
     return
   fi
-  grep -oE 'port [0-9]+' "$ANCHOR_FILE" | awk '{print $2}' | sort -un | while read -r port; do
+
+  local count=0 listening_count=0
+  while read -r port; do
     local PIDS NAME
     PIDS=$(lsof -ti :"$port" 2>/dev/null || true)
     if [ -n "$PIDS" ]; then
       NAME=$(echo "$PIDS" | xargs -I{} ps -p {} -o comm= 2>/dev/null | head -1 || true)
-      printf "  %-8s  listening  (%s)\n" "$port" "$NAME"
+      printf "  ${G}●${R}  ${B}%-8s${R}  ${G}listening${R}   ${D}%s${R}\n" "$port" "$NAME"
+      (( listening_count++ )) || true
     else
-      printf "  %-8s  not listening\n" "$port"
+      printf "  ${Y}○${R}  ${B}%-8s${R}  ${D}not listening${R}\n" "$port"
     fi
-  done
+    (( count++ )) || true
+  done < <(grep -oE 'port [0-9]+' "$ANCHOR_FILE" | awk '{print $2}' | sort -un)
+
+  printf "\n${C}  ────────────────────────────────────────────${R}\n"
+  printf "  ${D}%d port(s) open  ·  %d listening${R}\n\n" "$count" "$listening_count"
 }
 
 closed_ports() {
-  echo "Closed ports (listening locally, no external access):"
-  echo ""
+  local C=$'\033[0;36m'
+  local Y=$'\033[0;33m'
+  local D=$'\033[2m'
+  local B=$'\033[1m'
+  local R=$'\033[0m'
+
+  printf "\n${B}${C}  Locally-Listening Ports${R}  ${D}(no external access)${R}\n"
+  printf "${C}  ────────────────────────────────────────────${R}\n\n"
+
   local open_list=""
   if [ -f "$ANCHOR_FILE" ] && [ -s "$ANCHOR_FILE" ]; then
     open_list=$(grep -oE 'port [0-9]+' "$ANCHOR_FILE" | awk '{print $2}' | sort -un | tr '\n' ' ')
   fi
-  lsof -iTCP -sTCP:LISTEN -P -n 2>/dev/null | awk 'NR>1 {print $9}' \
-    | grep -oE '[0-9]+$' | sort -un | while read -r port; do
+
+  local count=0
+  while read -r port; do
     if ! echo " $open_list " | grep -q " $port "; then
       local NAME
       NAME=$(lsof -ti :"$port" 2>/dev/null | xargs -I{} ps -p {} -o comm= 2>/dev/null | head -1 || true)
-      printf "  %-8s  closed  (%s)\n" "$port" "$NAME"
+      printf "  ${Y}◆${R}  ${B}%-8s${R}  ${D}local only${R}   ${D}%s${R}\n" "$port" "$NAME"
+      (( count++ )) || true
     fi
-  done
+  done < <(lsof -iTCP -sTCP:LISTEN -P -n 2>/dev/null | awk 'NR>1 {print $9}' | grep -oE '[0-9]+$' | sort -un)
+
+  if [ "$count" -eq 0 ]; then
+    printf "  ${D}No locally-only listening ports found.${R}\n\n"
+    return
+  fi
+
+  printf "\n${C}  ────────────────────────────────────────────${R}\n"
+  printf "  ${D}%d port(s) listening locally  ·  no external access${R}\n\n" "$count"
+}
+
+ports_inspect() {
+  local C=$'\033[0;36m'
+  local G=$'\033[0;32m'
+  local Y=$'\033[0;33m'
+  local D=$'\033[2m'
+  local B=$'\033[1m'
+  local R=$'\033[0m'
+
+  printf "\n${B}${C}  Port Inspector${R}  ${D}(local view — what this machine sees)${R}\n"
+  printf "${C}  ────────────────────────────────────────────${R}\n\n"
+
+  # Firewall status
+  local fw_status fw_enabled=false
+  fw_status=$(pfctl -s info 2>/dev/null | awk '/^Status:/{print $2}' || true)
+  if [ "$fw_status" = "Enabled" ]; then
+    fw_enabled=true
+    printf "  Firewall  ${G}${B}ENABLED${R}   ${D}pfctl is active${R}\n"
+  else
+    printf "  Firewall  ${Y}${B}DISABLED${R}  ${D}pfctl is off — all listening ports may be reachable externally${R}\n"
+  fi
+
+  # Local LAN IP
+  local lan_ip
+  lan_ip=$(ifconfig -l 2>/dev/null | tr ' ' '\n' | while read -r iface; do
+    ifconfig "$iface" 2>/dev/null | awk '/inet / && $2 != "127.0.0.1"{print $2; exit}'
+  done | head -1)
+  [ -n "$lan_ip" ] && printf "  LAN IP    ${B}%s${R}\n" "$lan_ip"
+
+  printf "\n  ${B}%-8s  %-14s  %-10s  %s${R}\n" "PORT" "PROCESS" "ACCESS" ""
+  printf "  ${D}%-8s  %-14s  %-10s${R}\n" "────────" "──────────────" "──────────"
+
+  # Build killport open list
+  local open_list=""
+  if [ -f "$ANCHOR_FILE" ] && [ -s "$ANCHOR_FILE" ]; then
+    open_list=$(grep -oE 'port [0-9]+' "$ANCHOR_FILE" | awk '{print $2}' | sort -un | tr '\n' ' ')
+  fi
+
+  local total=0 open_count=0
+  while read -r port; do
+    local NAME raw_name
+    raw_name=$(lsof -ti :"$port" 2>/dev/null | xargs -I{} ps -p {} -o comm= 2>/dev/null | head -1 || true)
+    NAME="${raw_name##*/}"
+    if [ ${#NAME} -gt 14 ]; then NAME="${NAME:0:13}…"; fi
+
+    if ! $fw_enabled; then
+      printf "  ${Y}◆${R}  ${B}%-8s${R}  %-14s  ${Y}likely open${R}  ${D}(firewall off)${R}\n" "$port" "$NAME"
+      (( open_count++ )) || true
+    elif echo " $open_list " | grep -q " $port "; then
+      printf "  ${G}●${R}  ${B}%-8s${R}  %-14s  ${G}open${R}         ${D}(killport rule)${R}\n" "$port" "$NAME"
+      (( open_count++ )) || true
+    else
+      printf "  ${D}○  %-8s  %-14s  blocked${R}\n" "$port" "$NAME"
+    fi
+    (( total++ )) || true
+  done < <(lsof -iTCP -sTCP:LISTEN -P -n 2>/dev/null | awk 'NR>1 {print $9}' | grep -oE '[0-9]+$' | sort -un)
+
+  printf "\n${C}  ────────────────────────────────────────────${R}\n"
+  printf "  ${D}%d port(s) listening  ·  %d open to external access${R}\n" "$total" "$open_count"
+  printf "\n  ${D}This is only what the local machine reports. To truly verify${R}\n"
+  printf "  ${D}external reachability, run from another machine:${R}\n"
+  if [ -n "$lan_ip" ]; then
+    printf "  ${B}killport opencheck %s${R}\n\n" "$lan_ip"
+  else
+    printf "  ${B}killport opencheck <this-machine-ip>${R}\n\n"
+  fi
+}
+
+opencheck_ports() {
+  local TARGET=$1
+  local C=$'\033[0;36m'
+  local G=$'\033[0;32m'
+  local D=$'\033[2m'
+  local B=$'\033[1m'
+  local R=$'\033[0m'
+
+  # Common ports to probe
+  local PORTS=(21 22 23 25 53 80 110 143 443 465 587 993 995 \
+               3000 3001 3306 4000 4200 5000 5173 5432 \
+               6379 8000 8080 8443 8888 9000 9090 9200 27017)
+
+  printf "\n${B}${C}  External Port Check${R}  ${D}→ %s${R}\n" "$TARGET"
+  printf "${C}  ────────────────────────────────────────────${R}\n\n"
+
+  if command -v nmap &>/dev/null; then
+    printf "  ${D}Scanning with nmap...${R}\n\n"
+    local port_csv
+    port_csv=$(IFS=,; echo "${PORTS[*]}")
+    local found=0
+    while IFS= read -r line; do
+      local port state service
+      port=$(echo "$line" | awk '{print $1}' | cut -d/ -f1)
+      state=$(echo "$line" | awk '{print $2}')
+      service=$(echo "$line" | awk '{print $3}')
+      [ "$state" != "open" ] && continue
+      printf "  ${G}●${R}  ${B}%-8s${R}  ${G}open${R}   ${D}%s${R}\n" "$port" "$service"
+      (( found++ )) || true
+    done < <(nmap -p "$port_csv" --open -T4 "$TARGET" 2>/dev/null | grep "^[0-9]")
+    if [ "$found" -eq 0 ]; then
+      printf "  ${D}No open ports found on scanned list.${R}\n"
+    fi
+    printf "\n${C}  ────────────────────────────────────────────${R}\n"
+    printf "  ${D}%d open port(s) found  ·  scanned %d common ports via nmap${R}\n\n" "$found" "${#PORTS[@]}"
+  else
+    printf "  ${D}nmap not found — probing %d common ports with nc (parallel)...${R}\n\n" "${#PORTS[@]}"
+    local tmpfile
+    tmpfile=$(mktemp)
+    for port in "${PORTS[@]}"; do
+      ( nc -z -w1 "$TARGET" "$port" 2>/dev/null && printf "%05d\n" "$port" >> "$tmpfile" ) &
+    done
+    wait
+    local found=0
+    if [ -s "$tmpfile" ]; then
+      while IFS= read -r padded; do
+        local port=$(( 10#$padded ))
+        printf "  ${G}●${R}  ${B}%-8s${R}  ${G}open${R}\n" "$port"
+        (( found++ )) || true
+      done < <(sort "$tmpfile")
+    fi
+    rm -f "$tmpfile"
+    if [ "$found" -eq 0 ]; then
+      printf "  ${D}No open ports found on scanned list.${R}\n"
+    fi
+    printf "\n${C}  ────────────────────────────────────────────${R}\n"
+    printf "  ${D}%d open port(s) found  ·  scanned %d common ports via nc${R}\n" "$found" "${#PORTS[@]}"
+    printf "  ${D}Install nmap for broader coverage: brew install nmap${R}\n\n"
+  fi
 }
 
 show_ip() {
@@ -194,7 +355,13 @@ show_ip() {
 
 if [ $# -eq 0 ]; then
   banner
-  echo "  v${VERSION}"
+  _remote=$(fetch_remote_version 2)
+  _CY=$'\033[0;33m' _CR=$'\033[0m' _CD=$'\033[2m'
+  if [ -n "$_remote" ] && [ "$_remote" != "$VERSION" ]; then
+    echo "  v${VERSION}  ${_CY}→  v${_remote} available${_CR}  ${_CD}(run: killport update)${_CR}"
+  else
+    echo "  v${VERSION}"
+  fi
   echo ""
   echo "  killport                   show this help and list listening ports"
   echo "  killport <port>            kill whatever is running on that port"
@@ -203,11 +370,12 @@ if [ $# -eq 0 ]; then
   echo "  killport close <port>      close a port from external connections"
   echo "  killport openports         show all ports open to external access"
   echo "  killport closedports       show all listening ports with no external access"
+  echo "  killport ports             inspect all ports with firewall status"
+  echo "  killport opencheck <ip>    probe an IP from this machine to check open ports"
   echo "  killport status <port>     show if a port is open or closed"
   echo "  killport ip                show IP addresses, DNS, and network info"
   echo "  killport update            update to the latest version"
   echo ""
-  check_update
   exit 0
 fi
 
@@ -215,15 +383,15 @@ case "$1" in
 
   update)
     echo "Checking for updates..."
-    remote=$(curl -fsSL --max-time 5 -H "Cache-Control: no-cache" -H "Pragma: no-cache" "${RAW}/VERSION" 2>/dev/null | tr -d '[:space:]' || true)
+    remote=$(fetch_remote_version 5)
     if [ -z "$remote" ]; then echo "Could not reach GitHub. Check your connection."; exit 1; fi
     if [ "$remote" = "$VERSION" ]; then echo "Already up to date (v${VERSION})"; exit 0; fi
     echo "Updating $VERSION → $remote..."
     INSTALL_PATH=$(command -v killport)
     if [ -w "$INSTALL_PATH" ]; then
-      curl -fsSL -H "Cache-Control: no-cache" -H "Pragma: no-cache" "${RAW}/killport" -o "$INSTALL_PATH" && chmod +x "$INSTALL_PATH"
+      curl -fsSL "${RAW}/killport" -o "$INSTALL_PATH" && chmod +x "$INSTALL_PATH"
     else
-      sudo curl -fsSL -H "Cache-Control: no-cache" -H "Pragma: no-cache" "${RAW}/killport" -o "$INSTALL_PATH" && sudo chmod +x "$INSTALL_PATH"
+      sudo curl -fsSL "${RAW}/killport" -o "$INSTALL_PATH" && sudo chmod +x "$INSTALL_PATH"
     fi
     echo "Updated to v${remote}. Run killport to confirm."
     ;;
@@ -238,6 +406,15 @@ case "$1" in
 
   closedports)
     closed_ports
+    ;;
+
+  ports)
+    ports_inspect
+    ;;
+
+  opencheck)
+    [ -z "${2:-}" ] && { echo "Usage: killport opencheck <ip>"; exit 1; }
+    opencheck_ports "$2"
     ;;
 
   status)
