@@ -2,7 +2,7 @@
 
 set -euo pipefail
 
-VERSION="1.6.2"
+VERSION="1.6.3"
 REPO="skosari/killport-mac"
 RAW="https://raw.githubusercontent.com/${REPO}/main"
 ANCHOR_FILE="/etc/pf.anchors/killport"
@@ -130,17 +130,25 @@ show_ip() {
   echo "Network Interfaces"
   echo "────────────────────────────────────"
   local iface mac ipv4 ipv6 status info
+  local primary_iface primary_mac primary_ipv4 primary_ipv6 primary_status
+  primary_iface="" primary_mac="" primary_ipv4="" primary_ipv6="" primary_status=""
+
   for iface in $(ifconfig -l 2>/dev/null); do
     info=$(ifconfig "$iface" 2>/dev/null)
-    mac=""
-    ipv4=""
-    ipv6=""
-    status=""
+    mac="";  ipv4="";  ipv6="";  status=""
     mac=$(printf '%s\n'    "$info" | awk '/ether /{print $2; exit}')
     ipv4=$(printf '%s\n'   "$info" | awk '/inet /{print $2; exit}')
     ipv6=$(printf '%s\n'   "$info" | awk '/inet6 / && $2 !~ /%/{print $2; exit}')
     status=$(printf '%s\n' "$info" | awk '/status:/{print $2; exit}')
     [ -z "$mac" ] && [ -z "$ipv4" ] && continue
+
+    # Reserve the first active interface with a real IPv4 as primary
+    if [ -z "$primary_iface" ] && [ "$status" = "active" ] && [ -n "$ipv4" ] && [ "$ipv4" != "127.0.0.1" ]; then
+      primary_iface="$iface"; primary_mac="$mac"; primary_ipv4="$ipv4"
+      primary_ipv6="$ipv6";   primary_status="$status"
+      continue
+    fi
+
     echo ""
     echo "  Interface: $iface"
     [ -n "$mac" ]    && echo "  MAC:       $mac"
@@ -148,6 +156,19 @@ show_ip() {
     [ -n "$ipv4" ]   && echo "  IPv4:      $ipv4"
     [ -n "$ipv6" ]   && echo "  IPv6:      $ipv6"
   done
+
+  # Print primary (LAN) interface last, inside a box
+  if [ -n "$primary_iface" ]; then
+    local B=$'\033[1;36m' R=$'\033[0m'
+    echo ""
+    printf "${B}┌─────────────────────────────────────────┐${R}\n"
+    printf "${B}│  %-41s│${R}\n" "Interface: $primary_iface"
+    [ -n "$primary_mac" ]    && printf "${B}│  %-41s│${R}\n" "MAC:       $primary_mac"
+    [ -n "$primary_status" ] && printf "${B}│  %-41s│${R}\n" "Status:    $primary_status"
+    [ -n "$primary_ipv4" ]   && printf "${B}│  %-41s│${R}\n" "IPv4:      $primary_ipv4"
+    [ -n "$primary_ipv6" ]   && printf "${B}│  %-41s│${R}\n" "IPv6:      $primary_ipv6"
+    printf "${B}└─────────────────────────────────────────┘${R}\n"
+  fi
 
   echo ""
   echo "Default Gateway"
