@@ -2,27 +2,64 @@
 
 set -euo pipefail
 
-usage() {
-  echo "Usage: killport <port>"
-  echo "       killport list"
-  exit 1
+VERSION="1.2.0"
+REPO="skosari/killport-mac"
+RAW="https://raw.githubusercontent.com/${REPO}/main"
+
+check_update() {
+  local remote
+  remote=$(curl -fsSL --max-time 2 "${RAW}/VERSION" 2>/dev/null | tr -d '[:space:]' || true)
+  if [ -n "$remote" ] && [ "$remote" != "$VERSION" ]; then
+    echo "  Update available: $VERSION → $remote  (run: killport update)"
+    echo ""
+  fi
 }
 
-if [ $# -eq 0 ]; then
-  echo "Usage: killport <port>"
-  echo "       killport list"
-  echo ""
+list_ports() {
   echo "Listening ports:"
   echo ""
   lsof -iTCP -iUDP -sTCP:LISTEN -P -n 2>/dev/null | awk 'NR>1 {printf "  %-8s %-10s %-10s %s\n", $9, $1, $2, $8}' | sort -t: -k2 -n
+}
+
+if [ $# -eq 0 ]; then
+  echo "killport v${VERSION}"
+  echo "Usage: killport <port>"
+  echo "       killport list"
+  echo "       killport update"
+  echo ""
+  check_update
+  list_ports
+  exit 0
+fi
+
+# --- update ---
+if [ "$1" = "update" ]; then
+  echo "Checking for updates..."
+  remote=$(curl -fsSL --max-time 5 "${RAW}/VERSION" 2>/dev/null | tr -d '[:space:]' || true)
+  if [ -z "$remote" ]; then
+    echo "Could not reach GitHub. Check your connection."
+    exit 1
+  fi
+  if [ "$remote" = "$VERSION" ]; then
+    echo "Already up to date (v${VERSION})"
+    exit 0
+  fi
+  echo "Updating $VERSION → $remote..."
+  INSTALL_PATH=$(command -v killport)
+  if [ -w "$INSTALL_PATH" ]; then
+    curl -fsSL "${RAW}/killport" -o "$INSTALL_PATH"
+    chmod +x "$INSTALL_PATH"
+  else
+    sudo curl -fsSL "${RAW}/killport" -o "$INSTALL_PATH"
+    sudo chmod +x "$INSTALL_PATH"
+  fi
+  echo "Updated to v${remote}. Run killport to confirm."
   exit 0
 fi
 
 # --- list all listening ports ---
 if [ "$1" = "list" ]; then
-  echo "Listening ports:"
-  echo ""
-  lsof -iTCP -iUDP -sTCP:LISTEN -P -n 2>/dev/null | awk 'NR>1 {printf "  %-8s %-10s %-10s %s\n", $9, $1, $2, $8}' | sort -t: -k2 -n
+  list_ports
   exit 0
 fi
 
@@ -46,14 +83,14 @@ echo ""
 while IFS= read -r pid; do
   info=$(ps -p "$pid" -o pid=,user=,comm=,command= 2>/dev/null || true)
   if [ -n "$info" ]; then
-    pid_col=$(echo "$info"   | awk '{print $1}')
-    user_col=$(echo "$info"  | awk '{print $2}')
-    name_col=$(echo "$info"  | awk '{print $3}')
-    cmd_col=$(echo "$info"   | awk '{$1=$2=$3=""; sub(/^ +/, ""); print}')
-    printf "  PID:     %s\n"  "$pid_col"
-    printf "  User:    %s\n"  "$user_col"
-    printf "  Name:    %s\n"  "$name_col"
-    printf "  Command: %s\n"  "$cmd_col"
+    pid_col=$(echo "$info"  | awk '{print $1}')
+    user_col=$(echo "$info" | awk '{print $2}')
+    name_col=$(echo "$info" | awk '{print $3}')
+    cmd_col=$(echo "$info"  | awk '{$1=$2=$3=""; sub(/^ +/, ""); print}')
+    printf "  PID:     %s\n" "$pid_col"
+    printf "  User:    %s\n" "$user_col"
+    printf "  Name:    %s\n" "$name_col"
+    printf "  Command: %s\n" "$cmd_col"
     echo ""
   fi
 done <<< "$PIDS"
