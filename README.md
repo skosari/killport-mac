@@ -34,8 +34,7 @@ curl -fsSL https://raw.githubusercontent.com/skosari/killport-mac/main/install.s
 ### Option 3 — Manual
 
 ```sh
-curl -fsSL https://raw.githubusercontent.com/skosari/killport-mac/main/killport \
-  -o /usr/local/bin/killport && chmod +x /usr/local/bin/killport
+sudo curl -fsSL https://raw.githubusercontent.com/skosari/killport-mac/main/killport -o /usr/local/bin/killport && sudo chmod +x /usr/local/bin/killport
 ```
 
 ---
@@ -43,5 +42,18 @@ curl -fsSL https://raw.githubusercontent.com/skosari/killport-mac/main/killport 
 ## Usage
 
 ```sh
-killport <port>
+killport <port>     # kill whatever is on that port
+killport list       # list all listening ports
+```
+
+### killport list
+
+```sh
+killport list
+# Listening ports:
+#
+#   *:3847      node        87078      TCP
+#   *:5000      ControlCe   1045       TCP
+#   *:7000      ControlCe   1045       TCP
+#   127.0.0.1:52081  node   82545      TCP
 ```
