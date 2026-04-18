@@ -2,7 +2,7 @@
 
 set -euo pipefail
 
-VERSION="1.10.3"
+VERSION="1.10.4"
 REPO="skosari/killport-mac"
 RAW="https://raw.githubusercontent.com/${REPO}/main"
 API="https://api.github.com/repos/${REPO}/contents"
@@ -1355,9 +1355,9 @@ attack_dispatch() {
       local C=$'\033[0;36m' D=$'\033[2m' B=$'\033[1m' R=$'\033[0m'
       printf "\n${B}${C}  killport attack${R}  ${D}AI-powered LAN penetration testing${R}\n"
       printf "${C}  ────────────────────────────────────────────${R}\n\n"
-      printf "  killport attack <ip>              scan 47 common ports + AI analysis\n"
-      printf "  killport attack allports <ip>     scan all 65535 ports + AI analysis\n"
-      printf "  killport attack <ip>:<port>       scan a single port + AI analysis\n"
+      printf "  killport attack <ip>              scan 47 common ports + AI analysis  (requires Ollama)\n"
+      printf "  killport attack allports <ip>     scan all 65535 ports + AI analysis  (requires Ollama)\n"
+      printf "  killport attack <ip>:<port>       scan a single port + AI analysis  (requires Ollama)\n"
       printf "  killport config                   configure Ollama host and model\n"
       printf "  killport attack log               view attack history\n\n"
       ;;
@@ -1809,7 +1809,9 @@ audit_firewall() {
   printf "${C}  ────────────────────────────────────────────${R}\n\n"
 
   local rules=""
+  printf "  ${D}Loading firewall rules...${R}"
   rules=$(sudo pfctl -sr 2>/dev/null || sudo pfctl -s rules 2>/dev/null || true)
+  printf "\r\033[K"
 
   if [ -z "$rules" ]; then
     printf "  ${Y}No firewall rules found (pfctl returned nothing or insufficient permissions).${R}\n"
@@ -2371,7 +2373,7 @@ fix_dispatch() {
   if [ -z "$sub" ]; then
     printf "\n${B}${C}  killport fix${R}  ${D}detect and fix service vulnerabilities${R}\n"
     printf "${C}  ────────────────────────────────────────────${R}\n\n"
-    printf "  killport fix <ip:port>     detect vulnerabilities and generate a fix\n\n"
+    printf "  killport fix <ip:port>     detect vulnerabilities and generate a fix  (requires Ollama)\n\n"
     printf "  ${D}Examples:${R}\n"
     printf "    killport fix 192.168.1.10:22     harden SSH\n"
     printf "    killport fix 192.168.1.10:6379   harden Redis\n"
@@ -2413,12 +2415,12 @@ if [ $# -eq 0 ]; then
   echo "  killport sniff <port>      capture and display traffic on a port"
   echo "  killport sniff <ip:port>   capture traffic to/from a specific host:port"
   echo "  killport vuln <ip:port>    detect service version + query CVE database"
-  echo "  killport fix <ip:port>     detect vulns and generate/apply a fix"
+  echo "  killport fix <ip:port>     detect vulns and generate/apply a fix  (requires Ollama)"
   echo "  killport audit             review firewall rules with plain-English findings"
   echo "  killport dns <domain>      DNS recon: A/MX/TXT/NS/AXFR zone transfer test"
   echo "  killport forward <p> <h:p> forward a local port to a remote host:port"
-  echo "  killport attack <ip>       AI pentest: scan all ports + analysis"
-  echo "  killport attack <ip>:port  AI pentest: scan single port + analysis"
+  echo "  killport attack <ip>       AI pentest: scan all ports + analysis  (requires Ollama)"
+  echo "  killport attack <ip>:port  AI pentest: scan single port + analysis  (requires Ollama)"
   echo "  killport config            configure Ollama host and model"
   echo "  killport attack log        view attack history"
   echo "  killport stress <ip:port>  authorized connection flood / stress test"
