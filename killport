@@ -1696,19 +1696,29 @@ cert_check() {
 # ── sniff ────────────────────────────────────────────────
 
 sniff_port() {
-  local port="${1:-}"
+  local target="${1:-}"
   local C=$'\033[0;36m' Y=$'\033[0;33m' D=$'\033[2m' B=$'\033[1m' R=$'\033[0m'
-  [ -z "$port" ] && { printf "\n  ${Y}Usage: killport sniff <port>${R}\n\n"; return 1; }
+  [ -z "$target" ] && { printf "\n  ${Y}Usage: killport sniff <port>  or  killport sniff <ip:port>${R}\n\n"; return 1; }
   command -v tcpdump &>/dev/null || { printf "\n  ${Y}tcpdump required:  brew install tcpdump / apt install tcpdump${R}\n\n"; return 1; }
 
-  printf "\n${B}${C}  killport sniff${R}  ${D}port %s  (Ctrl+C to stop)${R}\n" "$port"
+  local filter label
+  if [[ "$target" == *:* ]]; then
+    local ip="${target%:*}" port="${target##*:}"
+    filter="host ${ip} and port ${port}"
+    label="${ip}:${port}"
+  else
+    filter="port ${target}"
+    label="port ${target}"
+  fi
+
+  printf "\n${B}${C}  killport sniff${R}  ${D}%s  (Ctrl+C to stop)${R}\n" "$label"
   printf "${C}  ────────────────────────────────────────────${R}\n\n"
-  printf "  ${D}Capturing on port %s. Requires sudo.${R}\n\n" "$port"
+  printf "  ${D}Filter: %s. Requires sudo.${R}\n\n" "$filter"
 
   local _stty; _stty=$(stty -g 2>/dev/null) || _stty=""
   trap '[ -n "$_stty" ] && stty "$_stty" 2>/dev/null || stty sane 2>/dev/null; printf "\n\n"; exit 0' INT TERM
 
-  sudo tcpdump -l -n -q "port $port" 2>/dev/null | while IFS= read -r line; do
+  sudo tcpdump -l -n -q "$filter" 2>/dev/null | while IFS= read -r line; do
     local ts="${line%% *}" rest="${line#* }"
     printf "  ${D}%s${R}  %s\n" "$ts" "$rest"
   done
@@ -1972,6 +1982,7 @@ if [ $# -eq 0 ]; then
   echo "  killport watch <port>      monitor live connections to a local port"
   echo "  killport cert <host:port>  inspect TLS certificate (expiry, SANs, cipher)"
   echo "  killport sniff <port>      capture and display traffic on a port"
+  echo "  killport sniff <ip:port>   capture traffic to/from a specific host:port"
   echo "  killport vuln <ip:port>    detect service version + query CVE database"
   echo "  killport audit             review firewall rules with plain-English findings"
   echo "  killport dns <domain>      DNS recon: A/MX/TXT/NS/AXFR zone transfer test"
