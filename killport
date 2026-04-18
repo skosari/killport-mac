@@ -2,7 +2,7 @@
 
 set -euo pipefail
 
-VERSION="1.10.2"
+VERSION="1.10.3"
 REPO="skosari/killport-mac"
 RAW="https://raw.githubusercontent.com/${REPO}/main"
 API="https://api.github.com/repos/${REPO}/contents"
@@ -1955,6 +1955,414 @@ forward_port() {
   fi
 }
 
+# ── fix ──────────────────────────────────────────────────
+
+fix_run() {
+  local target="${1:-}"
+  local C=$'\033[0;36m' G=$'\033[0;32m' Y=$'\033[0;33m'
+  local RE=$'\033[0;31m' D=$'\033[2m' B=$'\033[1m' R=$'\033[0m'
+
+  if [ -z "$target" ] || [[ "$target" != *:* ]]; then
+    printf "\n  ${Y}Usage: killport fix <ip:port>${R}\n\n"; return 1
+  fi
+  local ip="${target%:*}" port="${target##*:}"
+
+  command -v nmap &>/dev/null || { printf "\n  ${Y}nmap required:  brew install nmap${R}\n\n"; return 1; }
+
+  printf "\n${B}${C}  killport fix${R}  ${D}%s${R}\n" "$target"
+  printf "${C}  ────────────────────────────────────────────${R}\n\n"
+  printf "  ${D}Detecting service on port %s...${R}\n\n" "$port"
+
+  local nmap_out svc ver svc_line
+  nmap_out=$(nmap -sV -p "$port" --open -T4 "$ip" 2>/dev/null)
+  svc_line=$(grep "${port}/tcp" <<< "$nmap_out" | head -1 || true)
+  svc=$(awk '{print $3}' <<< "$svc_line" || true)
+  ver=$(awk '{$1=$2=$3=""; print $0}' <<< "$svc_line" | sed 's/^ *//' || true)
+
+  if [ -z "$svc" ] || [ "$svc" = "open" ] || [ "$svc" = "filtered" ]; then
+    printf "  ${Y}Could not detect service on %s:%s${R}\n\n" "$ip" "$port"; return 1
+  fi
+
+  printf "  ${B}Service:${R}  %s\n" "$svc"
+  printf "  ${B}Version:${R}  ${D}%s${R}\n\n" "${ver:-unknown}"
+
+  # Detect if target is this machine
+  local _is_local=0
+  [[ "$ip" == "127."* || "$ip" == "::1" || "$ip" == "localhost" ]] && _is_local=1
+  if [ "$_is_local" -eq 0 ]; then
+    while IFS= read -r _own; do
+      [ "$_own" = "$ip" ] && _is_local=1 && break
+    done < <(ifconfig 2>/dev/null | awk '/inet /{gsub("addr:","",$2); print $2}')
+  fi
+
+  if [ "$_is_local" -eq 1 ]; then
+    printf "  ${G}✓  Target is this machine — can apply fixes directly.${R}\n\n"
+  else
+    printf "  ${D}Remote target — will generate a fix script to copy over.${R}\n\n"
+  fi
+
+  attack_load_conf
+  local _ollama="${ATTACK_OLLAMA:-localhost:11434}"
+  local _model="${ATTACK_MODEL:-}"
+
+  local _py _script
+  _py=$(mktemp /tmp/kp_fix_XXXXXX.py)
+  _script=$(mktemp /tmp/kp_fix_apply_XXXXXX.sh)
+
+  local _saved_stty; _saved_stty=$(stty -g 2>/dev/null) || _saved_stty=""
+  trap 'rm -f "${_py:-}" 2>/dev/null; stty sane 2>/dev/null || true' EXIT INT TERM
+
+  cat > "$_py" << 'FIXPYEOF'
+import sys,json,subprocess,os,re,datetime,platform
+try: import urllib.request,urllib.parse; HAS_NET=True
+except: HAS_NET=False
+
+IP=sys.argv[1]; PORT=sys.argv[2]; SVC=sys.argv[3]; VER=sys.argv[4]
+IS_LOCAL=sys.argv[5]=="1"; OLLAMA=sys.argv[6]; MODEL=sys.argv[7]; SCRIPT_OUT=sys.argv[8]
+OS_=platform.system()  # Darwin or Linux
+
+B="\033[1m"; C="\033[0;36m"; D="\033[2m"; G="\033[0;32m"
+Y="\033[0;33m"; RE="\033[0;31m"; R="\033[0m"
+SC={"CRITICAL":RE,"HIGH":RE,"MEDIUM":Y,"LOW":G,"NONE":D}
+
+# ── Query NVD ────────────────────────────────────────────────
+cvelist=[]
+if HAS_NET:
+    try:
+        print(f"  {D}Querying NVD database...{R}",flush=True)
+        kw=f"{SVC} {VER.split()[0]}" if VER else SVC
+        query=urllib.parse.quote(kw)
+        url=f"https://services.nvd.nist.gov/rest/json/cves/2.0?keywordSearch={query}&resultsPerPage=5"
+        req=urllib.request.Request(url,headers={"User-Agent":"killport/1.0"})
+        with urllib.request.urlopen(req,timeout=12) as r: obj=json.loads(r.read())
+        vulns=obj.get("vulnerabilities",[]); total=obj.get("totalResults",len(vulns))
+        if vulns:
+            print(f"\n  {B}{total}{R} CVE(s) — top {len(vulns)} shown:\n")
+            for v in vulns:
+                c=v.get("cve",{})
+                cid=c.get("id","?")
+                desc=next((d["value"] for d in c.get("descriptions",[]) if d.get("lang")=="en"),"")[:100]
+                sev,score="UNKNOWN",""
+                for mk in ("cvssMetricV31","cvssMetricV30","cvssMetricV2"):
+                    if mk in c.get("metrics",{}):
+                        m0=c["metrics"][mk][0]; cd=m0.get("cvssData",{})
+                        sev=cd.get("baseSeverity",m0.get("baseSeverity","?")); score=str(cd.get("baseScore",""))
+                        break
+                sc=SC.get(sev.upper(),D)
+                print(f"  {B}{cid}{R}  {sc}[{sev}  {score}]{R}")
+                print(f"  {D}{desc}{'...' if len(desc)==100 else ''}{R}\n")
+                cvelist.append(f"{cid} [{sev} {score}]: {desc}")
+    except Exception as e:
+        print(f"  {Y}NVD unavailable: {e}{R}\n")
+
+# ── Generate fix script ──────────────────────────────────────
+def gen_script():
+    L=[
+        "#!/usr/bin/env bash","set -e","",
+        f"# killport fix — {SVC} {VER} — {IP}:{PORT}",
+        f"# Generated: {datetime.datetime.now().strftime('%Y-%m-%d %H:%M')}","",
+        "log() { printf '  [fix] %s\\n' \"$*\"; }",
+        "warn(){ printf '  [!]  %s\\n' \"$*\"; }","",
+    ]
+    s=SVC.lower()
+
+    if "ssh" in s or s=="openssh":
+        L+=[
+            "log 'Hardening SSH...'",
+            "CONF=/etc/ssh/sshd_config",
+            "[ -f \"$CONF\" ] || { warn 'sshd_config not found'; exit 1; }",
+            "cp \"$CONF\" \"${CONF}.bak.$(date +%s)\" && log 'Backed up sshd_config'",
+            "",
+            "set_opt() {",
+            "  local k=\"$1\" v=\"$2\"",
+            "  if grep -qE \"^#?[[:space:]]*${k}[[:space:]]\" \"$CONF\"; then",
+            "    sed -i.tmp \"s|^#\\?[[:space:]]*${k}[[:space:]].*|${k} ${v}|\" \"$CONF\"",
+            "  else",
+            "    echo \"${k} ${v}\" >> \"$CONF\"",
+            "  fi",
+            "}",
+            "",
+            "set_opt Protocol 2",
+            "set_opt PermitRootLogin no",
+            "set_opt MaxAuthTries 3",
+            "set_opt MaxSessions 5",
+            "set_opt X11Forwarding no",
+            "set_opt LoginGraceTime 30",
+            "set_opt PermitEmptyPasswords no",
+            "set_opt UseDNS no",
+            "set_opt ClientAliveInterval 300",
+            "set_opt ClientAliveCountMax 2",
+            "log 'sshd_config hardened'",
+            "",
+            "# Restart service",
+            "if command -v systemctl &>/dev/null; then",
+            "  systemctl restart sshd 2>/dev/null || systemctl restart ssh 2>/dev/null",
+            "elif [ \"$(uname)\" = Darwin ]; then",
+            "  launchctl unload /System/Library/LaunchDaemons/ssh.plist 2>/dev/null || true",
+            "  launchctl load  /System/Library/LaunchDaemons/ssh.plist 2>/dev/null || true",
+            "else service ssh restart 2>/dev/null || true; fi",
+            "log 'SSH service restarted'",
+            "",
+            "# Upgrade",
+            "if   command -v apt-get &>/dev/null; then apt-get update -qq && apt-get install --only-upgrade openssh-server -y",
+            "elif command -v dnf     &>/dev/null; then dnf update openssh-server -y",
+            "elif command -v yum     &>/dev/null; then yum update openssh-server -y",
+            "elif command -v brew    &>/dev/null; then brew upgrade openssh 2>/dev/null || true",
+            "fi",
+            "log 'OpenSSH upgrade attempted'",
+        ]
+
+    elif "redis" in s:
+        L+=[
+            "log 'Hardening Redis...'",
+            "CONF=$(find /etc /usr/local/etc /opt/homebrew/etc -name 'redis.conf' 2>/dev/null | head -1)",
+            "[ -n \"$CONF\" ] || { warn 'redis.conf not found — install Redis first'; exit 1; }",
+            "cp \"$CONF\" \"${CONF}.bak.$(date +%s)\"",
+            "",
+            "# Bind to localhost only",
+            "if grep -q '^bind ' \"$CONF\"; then sed -i.tmp 's/^bind .*/bind 127.0.0.1 -::1/' \"$CONF\"",
+            "else echo 'bind 127.0.0.1' >> \"$CONF\"; fi",
+            "",
+            "# Require password",
+            "if ! grep -qE '^requirepass ' \"$CONF\"; then",
+            "  PASS=$(openssl rand -base64 32 2>/dev/null || head -c 32 /dev/urandom | base64 | tr -d '\\n')",
+            "  echo \"requirepass $PASS\" >> \"$CONF\"",
+            "  warn \"Redis password set to: $PASS  — save this now\"",
+            "fi",
+            "",
+            "# Disable dangerous commands",
+            "for CMD in FLUSHALL FLUSHDB CONFIG DEBUG SLAVEOF; do",
+            "  grep -q \"rename-command $CMD\" \"$CONF\" || echo \"rename-command $CMD \\\"\\\"\" >> \"$CONF\"",
+            "done",
+            "",
+            "systemctl restart redis 2>/dev/null || systemctl restart redis-server 2>/dev/null || service redis-server restart 2>/dev/null || true",
+            "log 'Redis hardened and restarted'",
+        ]
+
+    elif "mysql" in s or "mariadb" in s:
+        L+=[
+            "log 'Hardening MySQL/MariaDB...'",
+            "mysql -u root 2>/dev/null <<'SQL'",
+            "DELETE FROM mysql.user WHERE User='';",
+            "DELETE FROM mysql.user WHERE User='root' AND Host NOT IN ('localhost','127.0.0.1','::1');",
+            "UPDATE mysql.user SET plugin='mysql_native_password' WHERE User='root';",
+            "DROP DATABASE IF EXISTS test;",
+            "DELETE FROM mysql.db WHERE Db='test' OR Db='test\\_%';",
+            "FLUSH PRIVILEGES;",
+            "SQL",
+            "log 'MySQL: removed anonymous users, restricted root, dropped test db'",
+            "if   command -v apt-get &>/dev/null; then apt-get update -qq && apt-get install --only-upgrade mysql-server mariadb-server -y 2>/dev/null || true",
+            "elif command -v dnf     &>/dev/null; then dnf update mysql-server -y 2>/dev/null || true",
+            "elif command -v yum     &>/dev/null; then yum update mysql-server -y 2>/dev/null || true; fi",
+        ]
+
+    elif "postgres" in s or s=="postgresql":
+        L+=[
+            "log 'Hardening PostgreSQL...'",
+            "PG_HBA=$(find /etc/postgresql /var/lib/postgresql /usr/local/var/postgresql* -name pg_hba.conf 2>/dev/null | head -1)",
+            "if [ -n \"$PG_HBA\" ]; then",
+            "  cp \"$PG_HBA\" \"${PG_HBA}.bak.$(date +%s)\"",
+            "  # Comment out any 0.0.0.0/0 allow-all lines",
+            "  sed -i.tmp 's|^host[[:space:]]\\+all[[:space:]]\\+all[[:space:]]\\+0\\.0\\.0\\.0/0.*|# & # disabled by killport fix|' \"$PG_HBA\"",
+            "  log 'Disabled remote all-host access in pg_hba.conf'",
+            "  warn 'Review pg_hba.conf and add specific trusted IPs if needed'",
+            "  systemctl reload postgresql 2>/dev/null || service postgresql reload 2>/dev/null || true",
+            "fi",
+            "if command -v apt-get &>/dev/null; then apt-get update -qq && apt-get install --only-upgrade postgresql -y 2>/dev/null || true; fi",
+        ]
+
+    elif "mongo" in s:
+        L+=[
+            "log 'Hardening MongoDB...'",
+            "CONF=$(find /etc -name 'mongod.conf' 2>/dev/null | head -1)",
+            "if [ -n \"$CONF\" ]; then",
+            "  cp \"$CONF\" \"${CONF}.bak.$(date +%s)\"",
+            "  if grep -q '^security:' \"$CONF\"; then",
+            "    grep -q 'authorization:' \"$CONF\" || sed -i.tmp '/^security:/a\\  authorization: enabled' \"$CONF\"",
+            "  else",
+            "    printf '\\nsecurity:\\n  authorization: enabled\\n' >> \"$CONF\"",
+            "  fi",
+            "  sed -i.tmp 's/bindIp:.*/bindIp: 127.0.0.1/' \"$CONF\"",
+            "  systemctl restart mongod 2>/dev/null || service mongod restart 2>/dev/null || true",
+            "  log 'MongoDB: auth enabled, bound to localhost'",
+            "fi",
+        ]
+
+    elif "http" in s or "nginx" in s or "apache" in s:
+        L+=[
+            "log 'Adding security headers...'",
+            "if command -v nginx &>/dev/null; then",
+            "  cat > /etc/nginx/conf.d/killport-security.conf << 'NGX'",
+            "add_header X-Frame-Options \"SAMEORIGIN\" always;",
+            "add_header X-XSS-Protection \"1; mode=block\" always;",
+            "add_header X-Content-Type-Options \"nosniff\" always;",
+            "add_header Referrer-Policy \"no-referrer-when-downgrade\" always;",
+            "add_header Strict-Transport-Security \"max-age=31536000; includeSubDomains\" always;",
+            "NGX",
+            "  nginx -t && systemctl reload nginx && log 'Nginx security headers added'",
+            "fi",
+            "if command -v apache2ctl &>/dev/null || command -v httpd &>/dev/null; then",
+            "  F=/etc/apache2/conf-available/killport-security.conf",
+            "  [ -d /etc/apache2/conf-available ] || F=/etc/httpd/conf.d/killport-security.conf",
+            "  cat > \"$F\" << 'APH'",
+            "Header always set X-Frame-Options \"SAMEORIGIN\"",
+            "Header always set X-Content-Type-Options \"nosniff\"",
+            "Header always set Strict-Transport-Security \"max-age=31536000\"",
+            "Header always set X-XSS-Protection \"1; mode=block\"",
+            "APH",
+            "  command -v a2enmod &>/dev/null && a2enmod headers 2>/dev/null || true",
+            "  command -v a2enconf &>/dev/null && a2enconf killport-security 2>/dev/null || true",
+            "  systemctl reload apache2 2>/dev/null || systemctl reload httpd 2>/dev/null || true",
+            "  log 'Apache security headers added'",
+            "fi",
+        ]
+
+    elif "ftp" in s:
+        L+=[
+            "warn 'FTP is a plaintext protocol — disabling and replacing with SFTP'",
+            "systemctl disable vsftpd proftpd 2>/dev/null; systemctl stop vsftpd proftpd 2>/dev/null || true",
+            "log 'FTP disabled — use SFTP (ssh) instead'",
+        ]
+
+    elif "telnet" in s:
+        L+=[
+            "warn 'Telnet is a plaintext protocol — disabling'",
+            "systemctl disable telnet inetd 2>/dev/null; systemctl stop telnet inetd 2>/dev/null || true",
+            "log 'Telnet disabled — use SSH instead'",
+        ]
+
+    elif "memcached" in s or "memcache" in s:
+        L+=[
+            "log 'Hardening Memcached...'",
+            "CONF=$(find /etc -name 'memcached.conf' 2>/dev/null | head -1)",
+            "if [ -n \"$CONF\" ]; then",
+            "  cp \"$CONF\" \"${CONF}.bak.$(date +%s)\"",
+            "  if grep -q '^-l' \"$CONF\"; then sed -i.tmp 's/^-l.*/-l 127.0.0.1/' \"$CONF\"",
+            "  else echo '-l 127.0.0.1' >> \"$CONF\"; fi",
+            "  systemctl restart memcached 2>/dev/null || service memcached restart 2>/dev/null || true",
+            "  log 'Memcached bound to localhost'",
+            "fi",
+        ]
+
+    else:
+        L+=[
+            f"warn 'No specific template for {SVC} — applying generic upgrade'",
+            f"if   command -v apt-get &>/dev/null; then apt-get update -qq && apt-get upgrade -y 2>/dev/null || true",
+            f"elif command -v dnf     &>/dev/null; then dnf upgrade -y 2>/dev/null || true",
+            f"elif command -v yum     &>/dev/null; then yum update -y 2>/dev/null || true",
+            f"elif command -v brew    &>/dev/null; then brew upgrade 2>/dev/null || true; fi",
+        ]
+
+    L+=["","log 'Fix script completed'",""]
+    return "\n".join(L)
+
+script_body=gen_script()
+with open(SCRIPT_OUT,"w") as f: f.write(script_body)
+os.chmod(SCRIPT_OUT,0o700)
+
+# ── AI Remediation Advice ────────────────────────────────────
+print(f"\n{C}  ────────────────────────────────────────────{R}")
+print(f"  {B}{C}AI Remediation Advice{R}\n")
+cve_text="\n".join(cvelist[:5]) if cvelist else "(no CVE data)"
+prompt=(f"Service: {SVC} {VER}\nTarget: {IP}:{PORT}\n\nTop CVEs:\n{cve_text}\n\n"
+        f"Give specific remediation in exactly 3 labeled sections:\n"
+        f"UPGRADE: exact command to upgrade {SVC} on this system\n"
+        f"CONFIG: top 4 config hardening settings with exact values for {SVC}\n"
+        f"NETWORK: ufw/iptables/pfctl commands to restrict access to this port\n\n"
+        f"Be concise. No preamble. Version-specific where possible.")
+if MODEL:
+    try:
+        payload=json.dumps({"model":MODEL,"messages":[{"role":"user","content":prompt}],"stream":True})
+        proc=subprocess.Popen(["curl","-sN",f"http://{OLLAMA}/api/chat",
+             "-H","Content-Type: application/json","--data-binary",payload],
+            stdout=subprocess.PIPE,stderr=subprocess.DEVNULL,text=True)
+        SP=["⠋","⠙","⠹","⠸","⠼","⠴","⠦","⠧","⠇","⠏"]
+        full=""; tok=0; in_think=False
+        for raw in iter(proc.stdout.readline,""):
+            try:
+                obj=json.loads(raw.strip())
+                t=obj.get("message",{}).get("content","")
+                if t:
+                    full+=t; tok+=1
+                    if "<think>" in t: in_think=True
+                    if "</think>" in t: in_think=False
+                    lbl="thinking" if in_think else "generating"
+                    sys.stdout.write(f"\r  {D}{SP[tok%len(SP)]}  {tok} tokens  [{lbl}]{R}   ")
+                    sys.stdout.flush()
+                if obj.get("done",False): break
+            except: pass
+        proc.wait()
+        sys.stdout.write("\r"+" "*50+"\r"); sys.stdout.flush()
+        full=re.sub(r'<think>.*?</think>','',full,flags=re.DOTALL)
+        full=re.sub(r'^.*?</think>\s*','',full,flags=re.DOTALL)
+        full=re.sub(r'<think>.*','',full,flags=re.DOTALL)
+        full=full.strip()
+        if full:
+            for line in full.splitlines():
+                l=line.rstrip()
+                if re.match(r'^(UPGRADE|CONFIG|NETWORK)[:\s]',l,re.I):
+                    print(f"\n  {B}{C}{l}{R}")
+                elif l.startswith("  ") or l.startswith("\t"):
+                    print(f"  {D}{l}{R}")
+                elif l:
+                    print(f"  {l}")
+        else:
+            print(f"  {D}(no AI response — is Ollama running?){R}")
+    except Exception as e:
+        print(f"  {D}AI unavailable: {e}{R}")
+else:
+    print(f"  {D}No model configured — run: killport attack config{R}")
+
+print(f"\n{C}  ────────────────────────────────────────────{R}")
+FIXPYEOF
+
+  python3 "$_py" "$ip" "$port" "$svc" "$ver" "$_is_local" \
+    "$_ollama" "${_model:-}" "$_script" 2>/dev/null || true
+
+  trap - EXIT INT TERM
+  rm -f "$_py" 2>/dev/null
+  [ -n "$_saved_stty" ] && stty "$_saved_stty" 2>/dev/null || stty sane 2>/dev/null || true
+
+  if [ ! -s "$_script" ]; then printf "  ${Y}Fix script generation failed.${R}\n\n"; return 1; fi
+
+  if [ "$_is_local" -eq 1 ]; then
+    printf "  Apply these fixes now? ${Y}(requires sudo)${R}  [yes/N]: "
+    local _ans=""; IFS= read -r _ans; _ans="${_ans%$'\r'}"
+    if [[ "$_ans" == "yes" ]]; then
+      printf "\n${C}  ────────────────────────────────────────────${R}\n\n"
+      sudo bash "$_script"
+      printf "\n${C}  ────────────────────────────────────────────${R}\n"
+      printf "  ${G}✓  Fixes applied.${R}  ${D}Verify with: killport vuln %s${R}\n\n" "$target"
+    else
+      printf "\n  ${D}Fix script saved to:${R}  %s\n" "$_script"
+      printf "  ${D}Run manually:       ${R}  sudo bash %s\n\n" "$_script"
+    fi
+  else
+    printf "  ${D}Fix script saved to:${R}  %s\n\n" "$_script"
+    printf "  ${D}Copy and apply on remote machine:${R}\n"
+    printf "  ${B}scp %s %s@%s:/tmp/fix.sh${R}\n" "$_script" '${USER}' "$ip"
+    printf "  ${B}ssh %s@%s 'sudo bash /tmp/fix.sh'${R}\n\n" '${USER}' "$ip"
+  fi
+}
+
+fix_dispatch() {
+  local sub="${1:-}"
+  local C=$'\033[0;36m' D=$'\033[2m' B=$'\033[1m' R=$'\033[0m'
+  if [ -z "$sub" ]; then
+    printf "\n${B}${C}  killport fix${R}  ${D}detect and fix service vulnerabilities${R}\n"
+    printf "${C}  ────────────────────────────────────────────${R}\n\n"
+    printf "  killport fix <ip:port>     detect vulnerabilities and generate a fix\n\n"
+    printf "  ${D}Examples:${R}\n"
+    printf "    killport fix 192.168.1.10:22     harden SSH\n"
+    printf "    killport fix 192.168.1.10:6379   harden Redis\n"
+    printf "    killport fix 127.0.0.1:3306      harden MySQL locally\n\n"
+    printf "  ${D}Supports: SSH, Redis, MySQL, PostgreSQL, MongoDB, HTTP/Nginx/Apache,\n"
+    printf "            FTP, Telnet, Memcached${R}\n\n"
+    return 0
+  fi
+  fix_run "$sub"
+}
+
 # -------------------------------------------------------
 
 if [ $# -eq 0 ]; then
@@ -1985,6 +2393,7 @@ if [ $# -eq 0 ]; then
   echo "  killport sniff <port>      capture and display traffic on a port"
   echo "  killport sniff <ip:port>   capture traffic to/from a specific host:port"
   echo "  killport vuln <ip:port>    detect service version + query CVE database"
+  echo "  killport fix <ip:port>     detect vulns and generate/apply a fix"
   echo "  killport audit             review firewall rules with plain-English findings"
   echo "  killport dns <domain>      DNS recon: A/MX/TXT/NS/AXFR zone transfer test"
   echo "  killport forward <p> <h:p> forward a local port to a remote host:port"
@@ -2019,6 +2428,10 @@ case "$1" in
 
   vuln)
     vuln_check "${2:-}"
+    ;;
+
+  fix)
+    fix_dispatch "${2:-}"
     ;;
 
   audit)
