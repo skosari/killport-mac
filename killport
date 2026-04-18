@@ -2,7 +2,7 @@
 
 set -euo pipefail
 
-VERSION="1.7.1"
+VERSION="1.7.2"
 REPO="skosari/killport-mac"
 RAW="https://raw.githubusercontent.com/${REPO}/main"
 API="https://api.github.com/repos/${REPO}/contents"
@@ -1108,8 +1108,10 @@ def ollama_chat(msgs, stream=False):
     if stream: return r.stdout
     try:
         content=json.loads(r.stdout)["message"]["content"]
-        content=re.sub(r'<think>.*?</think>','',content,flags=re.DOTALL).strip()
-        return content
+        content=re.sub(r'<think>.*?</think>','',content,flags=re.DOTALL)  # complete blocks
+        content=re.sub(r'^.*?</think>\s*','',content,flags=re.DOTALL)     # orphaned </think> (no opening tag)
+        content=re.sub(r'<think>.*$','',content,flags=re.DOTALL)          # orphaned <think> (no closing tag)
+        return content.strip()
     except: return ""
 
 def ollama_describe(port, data):
