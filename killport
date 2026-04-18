@@ -2,7 +2,7 @@
 
 set -euo pipefail
 
-VERSION="1.8.0"
+VERSION="1.8.1"
 REPO="skosari/killport-mac"
 RAW="https://raw.githubusercontent.com/${REPO}/main"
 API="https://api.github.com/repos/${REPO}/contents"
@@ -378,6 +378,7 @@ attack_save_conf() {
 attack_config() {
   local C=$'\033[0;36m' G=$'\033[0;32m' Y=$'\033[0;33m' RE=$'\033[0;31m'
   local D=$'\033[2m' B=$'\033[1m' R=$'\033[0m'
+  stty sane 2>/dev/null || true   # reset TTY in case a previous run left it broken
   attack_load_conf
   printf "\n${B}${C}  Attack Config${R}\n"
   printf "${C}  ────────────────────────────────────────────${R}\n\n"
@@ -392,7 +393,7 @@ attack_config() {
   printf "    ${D}• Remote server:   ${B}45.76.x.x:11434${R}   ${D}(must have port 11434 open)${R}\n\n"
   printf "  ${D}Default port is always 11434. Press Enter to keep current value.${R}\n\n"
   printf "  Current: ${B}%s${R}\n  → " "$ATTACK_OLLAMA"
-  read -r _h; [ -n "$_h" ] && ATTACK_OLLAMA="$_h"
+  read -r _h; _h="${_h%$'\r'}"; [ -n "$_h" ] && ATTACK_OLLAMA="${_h%$'\r'}"
 
   # ── Connect and list models ──────────────────────────
   printf "\n  ${D}Connecting to Ollama at %s...${R}\n" "$ATTACK_OLLAMA"
@@ -450,7 +451,7 @@ for m in d.get('models',[]):
   done
 
   printf "\n  Select model  ${D}[current: %s]${R}\n  → " "$current_display"
-  read -r _sel
+  read -r _sel; _sel="${_sel%$'\r'}"
 
   if [ -z "$_sel" ]; then
     : # keep existing
@@ -1294,9 +1295,11 @@ sys.stderr.write(report)
 PYEOF
 
   local log_tmp="/tmp/kp_log_$$_$RANDOM.txt"
-  trap 'rm -f "$py_agent" "$log_tmp" 2>/dev/null' EXIT INT TERM
+  local _saved_stty; _saved_stty=$(stty -g 2>/dev/null) || _saved_stty=""
+  trap 'rm -f "$py_agent" "$log_tmp" 2>/dev/null; [ -n "$_saved_stty" ] && stty "$_saved_stty" 2>/dev/null || stty sane 2>/dev/null || true' EXIT INT TERM
   KP_OLLAMA="$ATTACK_OLLAMA" KP_MODEL="$MODEL" KP_TARGET="$TARGET" \
     KP_SERVICES="$service_lines" KP_DEPTH="$KP_DEPTH" python3 "$py_agent" 2>"$log_tmp" || true
+  [ -n "$_saved_stty" ] && stty "$_saved_stty" 2>/dev/null || stty sane 2>/dev/null || true
 
   local report_text=""
   [ -f "$log_tmp" ] && report_text=$(cat "$log_tmp")
