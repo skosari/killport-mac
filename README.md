@@ -11,7 +11,7 @@
 
 **Kill whatever is running on a port — macOS**
 
-[![Version](https://img.shields.io/badge/version-1.6.7-00b4d8?style=flat-square)](#)
+[![Version](https://img.shields.io/badge/version-1.10.3-00b4d8?style=flat-square)](#)
 [![Platform](https://img.shields.io/badge/platform-macOS-00b4d8?style=flat-square&logo=apple&logoColor=white)](#)
 [![Shell](https://img.shields.io/badge/shell-bash-00b4d8?style=flat-square&logo=gnubash&logoColor=white)](#)
 [![License](https://img.shields.io/badge/license-Source%20Available-00b4d8?style=flat-square)](LICENSE)
@@ -54,18 +54,30 @@ curl -fsSL https://raw.githubusercontent.com/skosari/killport-mac/main/killport 
 | `killport open <port>` | Open a port to external connections (pfctl) |
 | `killport close <port>` | Close a port from external connections |
 | `killport openports` | Show all ports open to external access |
+| `killport openports <ip>` | Probe an IP to verify which ports are reachable |
 | `killport closedports` | Show all listening ports with no external access |
 | `killport ports` | Inspect all ports with live firewall status |
-| `killport opencheck <ip>` | Probe an IP to verify external reachability |
 | `killport status <port>` | Show if a port is open or closed |
 | `killport ip` | Show IP addresses, DNS, and network info |
-| `killport update` | Update to the latest version |
-| `killport uninstall` | Remove killport and all firewall rules |
+| `killport scan <ip>` | Scan ports on a remote host (no AI) |
+| `killport scan <ip> all` | Scan all 65535 ports on a remote host |
+| `killport watch <port>` | Monitor live connections to a local port |
+| `killport cert <host:port>` | Inspect TLS certificate (expiry, SANs, cipher) |
+| `killport sniff <port>` | Capture and display traffic on a port |
+| `killport sniff <ip:port>` | Capture traffic to/from a specific host:port |
+| `killport vuln <ip:port>` | Detect service version + query CVE database |
+| `killport fix <ip:port>` | Detect vulns and generate/apply a hardening fix |
+| `killport audit` | Review firewall rules with plain-English findings |
+| `killport dns <domain>` | DNS recon: A/MX/TXT/NS/AXFR zone transfer test |
+| `killport forward <port> <host:port>` | Forward a local port to a remote host:port |
+| `killport stress <ip:port>` | Authorized connection flood / stress test |
 | `killport attack <ip>` | AI pentest: scan 47 common ports + analysis |
 | `killport attack allports <ip>` | AI pentest: scan all 65535 ports + analysis |
 | `killport attack <ip>:<port>` | AI pentest: single port deep dive |
 | `killport attack config` | Configure Ollama host and model |
 | `killport attack log` | View attack history |
+| `killport update` | Update to the latest version |
+| `killport uninstall` | Remove killport and all firewall rules |
 
 ---
 
@@ -85,22 +97,10 @@ Killed.
 
 ### `killport list`
 ```
-  ●  *:3000          node        48291    IPv6
-  ●  *:5432          postgres    312      IPv4
-  ●  *:8080          nginx       1024     IPv4
-  ●  127.0.0.1:6379  redis       2048     IPv4
-```
-
-### `killport open 8080`
-```
-Opening port 8080 to external connections...
-Port 8080 is now open (TCP + UDP).
-```
-
-### `killport close 8080`
-```
-Closing port 8080 from external connections...
-Port 8080 is now closed.
+  ●  *:3000          node        48291
+  ●  *:5432          postgres    312
+  ●  *:8080          nginx       1024
+  ●  127.0.0.1:6379  redis       2048
 ```
 
 ### `killport openports`
@@ -114,45 +114,12 @@ Port 8080 is now closed.
 
   ────────────────────────────────────────────
   3 port(s) open  ·  2 listening
+
+  To verify external reachability from another machine:
+  killport openports 192.168.1.42
 ```
 
-### `killport closedports`
-```
-  Locally-Listening Ports  (no external access)
-  ────────────────────────────────────────────
-
-  ◆  3000      local only   node
-  ◆  5432      local only   postgres
-  ◆  6379      local only   redis
-
-  ────────────────────────────────────────────
-  3 port(s) listening locally  ·  no external access
-```
-
-### `killport ports`
-```
-  Port Inspector  (local view — what this machine sees)
-  ────────────────────────────────────────────
-
-  Firewall  ENABLED   pfctl is active
-  LAN IP    192.168.1.42
-
-  PORT      PROCESS         ACCESS
-  ────────  ──────────────  ──────────
-  ●  80       nginx           open         (killport rule)
-  ●  443      nginx           open         (killport rule)
-  ○  3000     node            blocked
-  ○  5432     postgres        blocked
-
-  ────────────────────────────────────────────
-  4 port(s) listening  ·  2 open to external access
-
-  This is only what the local machine reports. To truly verify
-  external reachability, run from another machine:
-  killport opencheck 192.168.1.42
-```
-
-### `killport opencheck 192.168.1.42`
+### `killport openports 192.168.1.42`
 ```
   External Port Check  → 192.168.1.42
   ────────────────────────────────────────────
@@ -165,6 +132,22 @@ Port 8080 is now closed.
   3 open port(s) found  ·  scanned 30 common ports via nmap
 ```
 
+### `killport ports`
+```
+  Port Inspector  (local view)
+  ────────────────────────────────────────────
+
+  Firewall  ENABLED   pfctl is active
+  LAN IP    192.168.1.42
+
+  PORT      PROCESS         ACCESS
+  ────────  ──────────────  ──────────
+  ●  80       nginx           open         (killport rule)
+  ●  443      nginx           open         (killport rule)
+  ○  3000     node            blocked
+  ○  5432     postgres        blocked
+```
+
 ### `killport status 3000`
 ```
   Port 3000 status:
@@ -173,94 +156,220 @@ Port 8080 is now closed.
   Listening: YES  (PID: 48291 — node)
 ```
 
-### `killport ip`
+### `killport scan 192.168.1.10`
 ```
-  Network Interfaces
-  ────────────────────────────────────
-
-  Interface: utun3
-  IPv4:      10.8.0.2
-
-  ┌─────────────────────────────────────────┐
-  │  Interface: en0                          │
-  │  MAC:       f8:ff:c2:1a:4b:9d           │
-  │  Status:    active                       │
-  │  IPv4:      192.168.1.42                │
-  └─────────────────────────────────────────┘
-
-  Default Gateway
-  ────────────────────────────────────
-  192.168.1.1
-
-  DNS Servers
-  ────────────────────────────────────
-  8.8.8.8
-  8.8.4.4
-
-  Firewall-managed ports (killport)
-  ────────────────────────────────────
-  80
-  443
-```
-
-### `killport update`
-```
-Checking for updates...
-Already up to date (v1.6.6)
-```
-
-### `killport uninstall`
-```
-Uninstalling killport...
-  Removed /usr/local/bin/killport
-  Removed /etc/pf.anchors/killport
-  Cleaned pf.conf
-killport uninstalled.
-```
-
-### `killport attack config`
-```
-  Attack Config
+  killport scan  192.168.1.10
   ────────────────────────────────────────────
 
-  Config: /Users/sam/.config/killport/attack.conf
+  Scanning common ports...
 
-  Ollama Host
-  Ollama is the AI engine that runs your models locally or on another machine.
+  PORT     SERVICE             VERSION
+  ────────────────────────────────────────────────────
+  22       ssh                 OpenSSH 9.2p1
+  80       http                nginx 1.24.0
+  3306     mysql               MySQL 8.0.33
+  6379     redis               Redis key-value store
 
-    • This machine:    localhost:11434  or  127.0.0.1:11434
-    • Another LAN box: 192.168.x.x:11434  (the IP of that machine)
-    • Remote server:   45.76.x.x:11434   (must have port 11434 open)
+  Host latency: 0.0012 s latency
+```
 
-  Default port is always 11434. Press Enter to keep current value.
+### `killport watch 3000`
+```
+  killport watch  port 3000  (Ctrl+C to stop)
+  ────────────────────────────────────────────
 
-  Current: localhost:11434
-  → 
+  TIME        REMOTE                      STATE           PROCESS
+  ──────────────────────────────────────────────────────────────
+  14:32:01    192.168.1.55:51204          ESTABLISHED     node
+  14:32:04    192.168.1.55:51205          ESTABLISHED     node
+  14:32:09    192.168.1.55:51204          CLOSE_WAIT      node
+```
 
-  Connecting to Ollama at localhost:11434...
-  Connected.  3 model(s) available:
+### `killport cert github.com`
+```
+  killport cert  github.com:443
+  ────────────────────────────────────────────
 
-  ▶  1  llama3.2:latest
-     2  deepseek-r1:8b
-     3  mistral:latest
+  Subject :  CN=github.com
+  Issuer  :  C=US, O=DigiCert Inc, CN=DigiCert TLS Hybrid ECC SHA384 2020 CA1
+  Expires :  2026-03-26  (341 days)
+  SANs    :
+    github.com
+    www.github.com
 
-  0 = auto-detect (always use first loaded model)
+  Protocol: Tls13
+  Cipher  : Aes128
+```
 
-  Select model  [current: 1]
-  → 2
+### `killport sniff 443`
+```
+  killport sniff  port 443  (Ctrl+C to stop)
+  ────────────────────────────────────────────
 
-  Saved.  Host: localhost:11434  ·  Model: deepseek-r1:8b
+  Filter: port 443. Requires sudo.
+
+  14:32:01.123  192.168.1.55.51204 > 192.168.1.1.443: Flags [S]
+  14:32:01.124  192.168.1.1.443 > 192.168.1.55.51204: Flags [S.]
+```
+
+### `killport sniff 192.168.1.10:22`
+```
+  killport sniff  192.168.1.10:22  (Ctrl+C to stop)
+  ────────────────────────────────────────────
+
+  Filter: host 192.168.1.10 and port 22. Requires sudo.
+
+  14:33:10.441  192.168.1.42.52100 > 192.168.1.10.22: Flags [S]
+  14:33:10.442  192.168.1.10.22 > 192.168.1.42.52100: Flags [S.]
+```
+
+### `killport vuln 192.168.1.10:22`
+```
+  killport vuln  192.168.1.10:22
+  ────────────────────────────────────────────
+
+  Detecting service on port 22...
+
+  Service:  ssh
+  Version:  OpenSSH 9.2p1
+
+  Querying NVD database...
+
+  85 CVE(s) found — showing top 10:
+
+  CVE-2023-38408  [CRITICAL  9.8]
+  The PKCS#11 feature in ssh-agent in OpenSSH before 9.3p2 has an insufficiently...
+
+  CVE-2023-51385  [MEDIUM  6.5]
+  In ssh in OpenSSH before 9.6, OS command injection might occur if a user name or...
+```
+
+### `killport fix 192.168.1.10:22`
+```
+  killport fix  192.168.1.10:22
+  ────────────────────────────────────────────
+
+  Detecting service on port 22...
+
+  Service:  ssh
+  Version:  OpenSSH 9.2p1
+
+  ✓  Target is this machine — can apply fixes directly.
+
+  Querying NVD database...
+
+  85 CVE(s) — top 5 shown:
+  CVE-2023-38408  [CRITICAL  9.8]  ...
+  CVE-2023-51385  [MEDIUM  6.5]    ...
+
+  ────────────────────────────────────────────
+  AI Remediation Advice
+
+  UPGRADE: brew upgrade openssh
+
+  CONFIG:
+    PermitRootLogin no
+    MaxAuthTries 3
+    X11Forwarding no
+    PermitEmptyPasswords no
+
+  NETWORK: sudo pfctl -e && echo "block in proto tcp to any port 22" | sudo pfctl -f -
+
+  ────────────────────────────────────────────
+  Apply these fixes now? (requires sudo)  [yes/N]: yes
+
+    [fix] Backed up sshd_config
+    [fix] sshd_config hardened
+    [fix] SSH service restarted
+    [fix] OpenSSH upgrade attempted
+    [fix] Fix script completed
+
+  ────────────────────────────────────────────
+  ✓  Fixes applied.  Verify with: killport vuln 192.168.1.10:22
+```
+
+### `killport audit`
+```
+  killport audit  firewall rule review
+  ────────────────────────────────────────────
+
+  Rules:
+
+    pass in proto tcp from any to any port 80
+    pass in proto tcp from any to any port 443
+    pass in proto tcp from any to any port 22
+
+  Findings:
+
+  ⚠  Port 22 (SSH) referenced — confirm it's restricted to trusted IPs.
+  ✓  No catch-all pass rule.
+  ⚠  No logging rules — consider adding 'log' to firewall rules.
+
+  Run 'killport ports' to cross-reference currently exposed ports.
+```
+
+### `killport dns github.com`
+```
+  killport dns  github.com
+  ────────────────────────────────────────────
+
+  A         140.82.121.4
+  AAAA      (none)
+  MX        10 aspmx.l.google.com
+  NS        ns-1707.awsdns-21.co.uk
+            ns-421.awsdns-52.com
+  TXT       "v=spf1 ip4:192.30.252.0/22 include:_netblocks.google.com ~all"
+
+  REVERSE
+    140.82.121.4  →  lb-140-82-121-4-iad.github.com
+
+  AXFR
+    ✓  Zone transfers blocked.
+```
+
+### `killport forward 8080 192.168.1.10:80`
+```
+  killport forward  localhost:8080  →  192.168.1.10:80
+  ────────────────────────────────────────────
+
+  ✓  socat  —  forwarding port 8080 to 192.168.1.10:80
+  Press Ctrl+C to stop.
+```
+
+### `killport stress 192.168.1.10:80`
+```
+  killport stress  authorized connection flood testing
+  ────────────────────────────────────────────
+
+  Target:   192.168.1.10:80  (service: http)
+
+  Duration in seconds — auto-starting in 10s [default 30]:  
+
+  ⚠  This will flood 192.168.1.10:80 for 30s at up to 20 concurrent connections.
+  Only test systems you own or have written authorization to test.
+
+  Type yes to confirm: yes
+
+  ────────────────────────────────────────────
+  30s · 20 threads · http
+
+  ⠸  [████████████████░░░░░░░░]  12,847 req  428/s  0 err  18s left
+
+  ════════════════════════════════════════════════════════
+  STRESS TEST COMPLETE
+  ════════════════════════════════════════════════════════
+  Service:   http  (192.168.1.10:80)
+  Duration:  30s  ·  Threads: 20
+  Requests:  18,432  (614/s avg  ·  891/s peak)
+  Errors:    0  (0%)
+  After:     ONLINE — still responding
+  ════════════════════════════════════════════════════════
 ```
 
 ### `killport attack 192.168.1.10`
 ```
   AI Pentest  →  192.168.1.10  (47 common ports)
   ────────────────────────────────────────────
-
-  nmap not installed — needed for port/service scanning.
-  Install it now with Homebrew? [Y/n] → y
-
-  ... (brew install nmap) ...
 
   Connecting to Ollama at localhost:11434...
   Model: deepseek-r1:8b
@@ -273,22 +382,21 @@ killport uninstalled.
 
   Agent starting  target: 192.168.1.10  ·  model: deepseek-r1:8b
 
-  ▶  SCAN_PORT 22
-  ▶  BANNER_GRAB 6379
+  💭 I'll start by scanning port 6379 for Redis — unauthenticated Redis is a common critical finding
+  ▶  SCAN_PORT 6379
+  💭 No password required. I'll try WORDLIST to confirm full access.
   ▶  WORDLIST redis 6379
      CRITICAL: Redis has NO password — fully open to anyone
   ▶  HTTP_PATHS 80
      200  /admin
      200  /.env
   ▶  HTTP_PROBE 80 /.env
-  ▶  WORDLIST ssh 22
-     no credentials from wordlist succeeded
   ▶  REPORT
 
-  Building report...
+  Writing report...
 
   ══════════════════════════════════════════════════════════════
-    SECURITY REPORT  ·  192.168.1.10  ·  2025-04-17 14:32
+    SECURITY REPORT  ·  192.168.1.10  ·  2025-04-18 14:32
     Model: deepseek-r1:8b
   ══════════════════════════════════════════════════════════════
 
@@ -297,106 +405,120 @@ killport uninstalled.
     ────────────────────────────────────────────────────────────────
     ⚠  NO PASSWORD REQUIRED — anyone on the network can connect
 
-    What this means:
-      Your Redis database has no password set.
-      Anyone on your network can read, modify, or delete all stored data.
-
     How to fix it:
-      1. Set a strong password: add  requirepass YOURPASSWORD  to /etc/redis/redis.conf
-      2. Bind Redis to localhost only: add  bind 127.0.0.1  to redis.conf
-      3. Block port 6379 from the network with a firewall rule
-
-    PORT 80 — HTTP  (Apache httpd 2.4.52)
-    Risk: 🟠 High
-    ────────────────────────────────────────────────────────────────
-    Sensitive paths found:
-      200  /admin
-      200  /.env
-
-    What this means:
-      Your web server is exposing an admin panel and environment file publicly.
-      The .env file may contain database passwords and API keys.
-
-    How to fix it:
-      1. Move to HTTPS — plain HTTP sends all data including passwords unencrypted
-      2. Keep your web server and all plugins/software up to date
-      3. Remove or password-protect any /admin or /config pages you find
-
-    PORT 22 — SSH  (OpenSSH 8.9p1 Ubuntu)
-    Risk: 🟡 Medium
-    ────────────────────────────────────────────────────────────────
-
-    What this means:
-      SSH lets you log in remotely to manage the server.
-      If weak passwords are allowed, attackers can brute-force their way in.
-
-    How to fix it:
-      1. Disable password login — use SSH keys only
-         Edit /etc/ssh/sshd_config → set: PasswordAuthentication no
-      2. Move SSH to a non-standard port (e.g. 2222) to reduce bot noise
-      3. Install fail2ban to automatically block repeated failed logins
+      1. Add  requirepass YOURPASSWORD  to /etc/redis/redis.conf
+      2. Add  bind 127.0.0.1  to redis.conf
+      3. Run: killport fix 192.168.1.10:6379
 
   ══════════════════════════════════════════════════════════════
   ── What to do first ──
   ══════════════════════════════════════════════════════════════
-    1. [CRITICAL] Set a password on redis (port 6379) — it has none right now
-    2. [HIGH] Review and harden http (port 80) — see fix steps above
+    1. [CRITICAL] Set a password on redis (port 6379)
+    2. [HIGH] Review /.env exposure on http (port 80)
 
-  ────────────────────────────────────────────
-  Complete  ·  model: deepseek-r1:8b  ·  target: 192.168.1.10
-  Logged to: /Users/sam/.config/killport/attack.log
+  Logged to: ~/.config/killport/attack.log
 ```
 
-### `killport attack allports 192.168.1.10`
-```
-  AI Pentest  →  192.168.1.10  (all 65535 ports)
-  ────────────────────────────────────────────
+---
 
-  Pass 1/2  Scanning 47 common ports on 192.168.1.10...
+## Security Toolkit
 
-  ●  22        ssh           OpenSSH 8.9p1
-  ●  80        http          Apache httpd 2.4.52
+killport includes a full suite of network security tools beyond just killing ports.
 
-  Pass 2/2  scanning remaining 65535 ports on 192.168.1.10...
+### Vulnerability Detection → `killport vuln`
 
-  [████████████████████░░░░░░░░░░░░░░░░░░░░]  51%
-  ●  49152     unknown
+Detects service version via nmap and queries the [NVD](https://nvd.nist.gov) CVE database for known vulnerabilities:
 
-  [████████████████████████████████████████] 100%
-  Pass 2/2 complete.
-
-  Agent starting  target: 192.168.1.10  ·  model: deepseek-r1:8b
-  ...
+```sh
+killport vuln 192.168.1.10:22    # SSH
+killport vuln 192.168.1.10:6379  # Redis
+killport vuln 192.168.1.10:3306  # MySQL
 ```
 
-### `killport attack 192.168.1.10:6379`
-```
-  AI Pentest  →  192.168.1.10 : 6379
-  ────────────────────────────────────────────
+### One-Command Hardening → `killport fix`
 
-  Scanning port 6379 on 192.168.1.10...
+Follows up on `vuln` findings with an automated fix. Detects whether the target is the local machine or remote:
 
-  ●  6379      redis         Redis key-value store
+- **Local target** — applies config hardening and restarts the service directly (with confirmation)
+- **Remote target** — generates a ready-to-run fix script with `scp` + `ssh` deploy instructions
 
-  Agent starting  target: 192.168.1.10  ·  model: deepseek-r1:8b
-
-  ▶  SCAN_PORT 6379
-  ▶  WORDLIST redis 6379
-     CRITICAL: Redis has NO password — fully open to anyone
-  ▶  REPORT
-  ...
+```sh
+killport fix 127.0.0.1:6379      # harden local Redis
+killport fix 192.168.1.10:22     # generate SSH fix script for remote machine
 ```
 
-### `killport attack log`
-```
-  Attack Log  /Users/sam/.config/killport/attack.log
+Supports: SSH, Redis, MySQL, PostgreSQL, MongoDB, Nginx/Apache, FTP, Telnet, Memcached.
 
-  ════════════════════════════════════════════════════════════
-  Time:   2025-04-17 14:32:01  |  Target: 192.168.1.10
-  Model:  deepseek-r1:8b       |  Ports:  47 common ports
-  ════════════════════════════════════════════════════════════
-  ... (full report) ...
+### Port Scanner → `killport scan`
+
+Fast nmap scan without the AI overhead — useful when you just want to see what's open:
+
+```sh
+killport scan 192.168.1.10        # common ports
+killport scan 192.168.1.10 all    # all 65535 ports
 ```
+
+### TLS Certificate Inspector → `killport cert`
+
+```sh
+killport cert github.com          # checks port 443 by default
+killport cert 192.168.1.10:8443   # custom port
+```
+
+Shows subject, issuer, expiry with days-remaining color coding (green/yellow/red), SANs, and TLS protocol/cipher.
+
+### Live Traffic Capture → `killport sniff`
+
+```sh
+killport sniff 443                    # all traffic on port 443
+killport sniff 192.168.1.10:22        # traffic to/from a specific host:port
+```
+
+Wraps `tcpdump` with clean formatting. Requires `sudo`.
+
+### Live Connection Monitor → `killport watch`
+
+```sh
+killport watch 3000    # watch connections arriving on port 3000 in real time
+```
+
+Shows each new connection with timestamp, remote IP, TCP state, and process name.
+
+### DNS Recon → `killport dns`
+
+```sh
+killport dns example.com
+```
+
+Queries A, AAAA, MX, NS, TXT records, reverse DNS for all A records, and attempts a zone transfer (AXFR) against each nameserver — flags misconfigured servers that allow it.
+
+### Firewall Audit → `killport audit`
+
+```sh
+killport audit
+```
+
+Reviews your pfctl rules and highlights: catch-all pass rules, dangerous exposed ports (MySQL, Redis, MongoDB, etc.), missing logging rules, and allowlists.
+
+### Port Forwarder → `killport forward`
+
+```sh
+killport forward 8080 192.168.1.10:80   # tunnel local:8080 → remote:80
+```
+
+Uses `socat` when available (full multi-connection), falls back to `nc`.
+
+### Stress Test → `killport stress`
+
+Authorized connection flood testing for load and resilience:
+
+```sh
+killport stress 192.168.1.10:80    # HTTP flood
+killport stress 192.168.1.10:6379  # Redis PING flood
+killport stress 192.168.1.10:22    # TCP connection flood
+```
+
+20 concurrent threads, live progress bar, reports requests/s, peak rate, error rate, and whether the service is still responsive after the test. Requires explicit `yes` confirmation.
 
 ---
 
@@ -404,134 +526,72 @@ killport uninstalled.
 
 > **Point it at any machine on your network. Watch an AI hunt for vulnerabilities in real time.**
 
-`killport attack` is a fully agentic AI pentest tool powered by [Ollama](https://ollama.com) — your local AI, running entirely on your hardware, no cloud, no API keys. It doesn't just run a scan and hand you a wall of output. It **thinks**, **acts**, and **investigates** — probing services, testing credentials, hunting for exposed paths, and attempting to crack hashes — then delivers a plain-English security report with specific fix steps anyone can follow.
+`killport attack` is a fully agentic AI pentest tool powered by [Ollama](https://ollama.com) — your local AI, running entirely on your hardware, no cloud, no API keys. It **thinks**, **acts**, and **investigates** — probing services, testing credentials, hunting for exposed paths, and attempting to crack hashes — then delivers a plain-English security report with specific fix steps.
 
 **Everything runs locally. Your scan data never leaves your machine.**
-
-### Zero setup friction — missing tools install themselves
-
-When you run `killport attack`, it checks whether `nmap`, `sshpass`, and `hashcat` are installed. If any are missing, it asks to install them for you **right there** — no new terminal, no manual steps:
-
-```
-  nmap not installed — needed for port/service scanning.
-  Install it now with Homebrew? [Y/n] → y
-  ... brew install nmap ...
-  Continuing.
-```
-
-Works with Homebrew. If Homebrew isn't installed, it shows you exactly how to get it.
 
 ### Setup
 
 1. [Install Ollama](https://ollama.com/download) and pull a model:
    ```sh
    ollama pull llama3.2
-   # or try a reasoning model:
+   # reasoning model (slower but deeper analysis):
    ollama pull deepseek-r1:8b
    ```
-2. Configure killport to point at your Ollama instance:
+2. Configure killport:
    ```sh
    killport attack config
    ```
-   - **This machine:** `localhost:11434` or `127.0.0.1:11434`
-   - **Another LAN machine:** `192.168.x.x:11434`
-   - **Remote server:** `45.76.x.x:11434` *(port 11434 must be open)*
-
-   The config screen connects live to Ollama and shows you the models you have loaded — pick one by number.
-
-3. Run your first attack:
+3. Run:
    ```sh
    killport attack 192.168.1.10
    ```
-   That's it. The AI takes over from there.
 
 ### Commands
 
 ```sh
-killport attack 192.168.1.10            # scan 47 common ports (fast)
-killport attack allports 192.168.1.10   # scan all 65535 ports with progress bar
-killport attack 192.168.1.10:6379       # deep dive a single port
-killport attack config                  # configure Ollama host + pick model
-killport attack log                     # view full history of past attacks
+killport attack 192.168.1.10            # scan 47 common ports
+killport attack allports 192.168.1.10   # scan all 65535 ports
+killport attack 192.168.1.10:6379       # single port deep dive
+killport attack config                  # configure Ollama host + model
+killport attack log                     # view past attack reports
 ```
 
-### How it works
-
-The agent runs a **ReAct loop** — Ollama reasons about what to investigate next, calls a tool, receives the result, and iterates (up to 20 rounds). The AI drives the entire investigation. You just watch it work.
+### Agent tools
 
 | Tool | What the AI can do |
 |---|---|
-| `SCAN_PORT` | Deep nmap scan with version detection on any port |
-| `BANNER_GRAB` | Raw TCP banner grab — extracts version strings and hashes |
-| `HTTP_PROBE` | Fetch HTTP/HTTPS responses — extracts embedded hashes |
-| `HTTP_PATHS` | Probe 20+ sensitive paths: `/admin`, `/.env`, `/actuator/env`, `/.git/HEAD`, etc. |
-| `WORDLIST` | Credential spray across SSH, FTP, Redis, MySQL, PostgreSQL, HTTP basic auth |
-| `NMAP_SCRIPT` | Run any nmap NSE script against any port |
-| `CRACK_HASH` | Crack MD5 / SHA1 / SHA256 / bcrypt / MD5crypt / SHA512crypt via hashcat or john + rockyou |
-
-The security report is **built programmatically** — risk levels, fix steps, and priority order are all deterministic code, not AI guesswork. Ollama contributes plain-English descriptions of each finding. The result is consistent, structured, and logged to `~/.config/killport/attack.log` after every run.
-
-### Example output
-
-```
-  AI Pentest  →  192.168.1.10  (47 common ports)
-  ────────────────────────────────────────────
-
-  Pass 1/2  Scanning 47 common ports on 192.168.1.10...
-
-  ●  22        ssh           OpenSSH 8.9p1
-  ●  6379      redis         Redis 7.0.11
-  ●  27017     mongodb       MongoDB 6.0
-
-  Agent starting  target: 192.168.1.10  ·  model: llama3.2
-
-  ▶  SCAN_PORT 6379
-  ▶  WORDLIST redis 6379
-     CRITICAL: Redis has NO password — fully open to anyone
-  ▶  HTTP_PATHS 27017
-  ▶  WORDLIST ssh 22
-  ▶  REPORT
-
-  ══════════════════════════════════════════════════════════════
-    SECURITY REPORT  ·  192.168.1.10  ·  2025-04-17 14:32
-    Model: llama3.2
-  ══════════════════════════════════════════════════════════════
-
-    PORT 6379 — REDIS
-    Risk: 🔴 Critical
-    ────────────────────────────────────────────────────────
-    ⚠  NO PASSWORD REQUIRED — anyone on the network can connect
-
-    What this means:
-      Your Redis database has no password set.
-      Anyone on your network can read, modify, or delete all stored data.
-
-    How to fix it:
-      1. Set a strong password: add  requirepass YOURPASSWORD  to /etc/redis/redis.conf
-      2. Bind Redis to localhost only: add  bind 127.0.0.1  to redis.conf
-      3. Block port 6379 from the network with a firewall rule
-
-  ══════════════════════════════════════════════════════════════
-  ── What to do first ──
-  ══════════════════════════════════════════════════════════════
-    1. [CRITICAL] Set a password on redis (port 6379) — it has none right now
-```
+| `SCAN_PORT` | Deep nmap scan with version detection |
+| `BANNER_GRAB` | Raw TCP banner grab |
+| `HTTP_PROBE` | Fetch HTTP/HTTPS paths, extract hashes |
+| `HTTP_PATHS` | Probe 20+ sensitive paths: `/admin`, `/.env`, `/.git/HEAD`, etc. |
+| `WORDLIST` | Credential spray: SSH, FTP, Redis, MySQL, PostgreSQL, HTTP |
+| `NMAP_SCRIPT` | Run any nmap NSE script |
+| `CRACK_HASH` | Crack MD5/SHA1/SHA256/bcrypt via hashcat or john |
 
 ---
 
 ## Uninstall
 
-**Homebrew:**
+**Option 1 — built-in command**
+
+```sh
+killport uninstall
+```
+
+Removes the binary and all pfctl firewall rules created by `killport open`.
+
+**Option 2 — Homebrew**
+
 ```sh
 brew uninstall killport && brew untap skosari/killport-mac
 ```
 
-**curl / manual install:**
+**Option 3 — curl**
+
 ```sh
 curl -fsSL https://raw.githubusercontent.com/skosari/killport-mac/main/uninstall.sh | bash
 ```
-
-Removes the binary and all pfctl firewall rules created by `killport open`.
 
 ---
 
