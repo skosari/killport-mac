@@ -2,7 +2,7 @@
 
 set -euo pipefail
 
-VERSION="1.9.0"
+VERSION="1.10.0"
 REPO="skosari/killport-mac"
 RAW="https://raw.githubusercontent.com/${REPO}/main"
 API="https://api.github.com/repos/${REPO}/contents"
@@ -1533,6 +1533,417 @@ stress_dispatch() {
   stress_run "$sub"
 }
 
+# ── scan ─────────────────────────────────────────────────
+
+scan_run() {
+  local target="${1:-}" mode="${2:-}"
+  local C=$'\033[0;36m' G=$'\033[0;32m' Y=$'\033[0;33m'
+  local D=$'\033[2m' B=$'\033[1m' R=$'\033[0m'
+  [ -z "$target" ] && { printf "\n  ${Y}Usage: killport scan <ip> [all]${R}\n\n"; return 1; }
+  command -v nmap &>/dev/null || { printf "\n  ${Y}nmap required:  brew install nmap${R}\n\n"; return 1; }
+
+  printf "\n${B}${C}  killport scan${R}  ${D}%s${R}\n" "$target"
+  printf "${C}  ────────────────────────────────────────────${R}\n\n"
+
+  local nmap_args=(-sV -T4 --open)
+  if [ "$mode" = "all" ]; then
+    printf "  ${D}Scanning all 65535 ports — this may take several minutes...${R}\n\n"
+    nmap_args=(-p- "${nmap_args[@]}")
+  else
+    printf "  ${D}Scanning common ports...${R}\n\n"
+  fi
+
+  local raw; raw=$(nmap "${nmap_args[@]}" "$target" 2>/dev/null)
+  local found=0
+  printf "  ${D}%-7s  %-18s  %s${R}\n" "PORT" "SERVICE" "VERSION"
+  printf "  ${D}%s${R}\n" "────────────────────────────────────────────────────"
+  while IFS= read -r line; do
+    if [[ "$line" =~ ^([0-9]+)/tcp[[:space:]]+open[[:space:]]+([^[:space:]]+)[[:space:]]*(.*) ]]; then
+      local p="${BASH_REMATCH[1]}" s="${BASH_REMATCH[2]}" v="${BASH_REMATCH[3]}"
+      printf "  ${G}%-7s${R}  %-18s  ${D}%s${R}\n" "$p" "$s" "$v"
+      found=1
+    fi
+  done <<< "$raw"
+  [ "$found" -eq 0 ] && printf "  ${D}No open ports found.${R}\n"
+  local lat; lat=$(grep -oE '[0-9.]+ s latency' <<< "$raw" | head -1 || true)
+  printf "\n"
+  [ -n "$lat" ] && printf "  ${D}Host latency: %s${R}\n\n" "$lat"
+}
+
+# ── watch ────────────────────────────────────────────────
+
+watch_port() {
+  local port="${1:-}"
+  local C=$'\033[0;36m' G=$'\033[0;32m' Y=$'\033[0;33m'
+  local RE=$'\033[0;31m' D=$'\033[2m' B=$'\033[1m' R=$'\033[0m'
+  [ -z "$port" ] && { printf "\n  ${Y}Usage: killport watch <port>${R}\n\n"; return 1; }
+
+  printf "\n${B}${C}  killport watch${R}  ${D}port %s  (Ctrl+C to stop)${R}\n" "$port"
+  printf "${C}  ────────────────────────────────────────────${R}\n\n"
+  printf "  ${D}%-10s  %-26s  %-14s  %s${R}\n" "TIME" "REMOTE" "STATE" "PROCESS"
+  printf "  ${D}%s${R}\n" "──────────────────────────────────────────────────────────"
+
+  local seen=()
+  local _stty; _stty=$(stty -g 2>/dev/null) || _stty=""
+  trap '[ -n "$_stty" ] && stty "$_stty" 2>/dev/null || stty sane 2>/dev/null; printf "\n\n"; exit 0' INT TERM
+
+  while true; do
+    local raw_conns=""
+    if command -v ss &>/dev/null; then
+      raw_conns=$(ss -tnp "sport = :${port} or dport = :${port}" 2>/dev/null | tail -n +2 || true)
+    else
+      raw_conns=$(netstat -tn 2>/dev/null | grep -E "\b${port}\b" || true)
+    fi
+    while IFS= read -r line; do
+      [ -z "$line" ] && continue
+      local state="" remote="" proc="-" ts
+      ts=$(date "+%H:%M:%S")
+      if command -v ss &>/dev/null; then
+        state=$(awk '{print $1}' <<< "$line")
+        remote=$(awk '{print $5}' <<< "$line")
+        proc=$(awk '{print $6}' <<< "$line" | grep -oE '"[^"]+"' | tr -d '"' | head -1 || echo "-")
+      else
+        state=$(awk '{print $6}' <<< "$line")
+        remote=$(awk '{print $5}' <<< "$line")
+      fi
+      local key="${remote}|${state}"
+      local already=0
+      for sv in "${seen[@]:-}"; do [ "$sv" = "$key" ] && already=1 && break; done
+      if [ "$already" -eq 0 ]; then
+        seen+=("$key")
+        local sc="$G"
+        [[ "$state" == "CLOSE_WAIT" || "$state" == "TIME_WAIT" ]] && sc="$Y"
+        [[ "$state" == "SYN_RECV" ]] && sc="$RE"
+        printf "  %-10s  %-26s  ${sc}%-14s${R}  ${D}%s${R}\n" "$ts" "$remote" "$state" "$proc"
+      fi
+    done <<< "$raw_conns"
+    sleep 0.5
+  done
+}
+
+# ── cert ─────────────────────────────────────────────────
+
+cert_check() {
+  local target="${1:-}"
+  local C=$'\033[0;36m' G=$'\033[0;32m' Y=$'\033[0;33m'
+  local RE=$'\033[0;31m' D=$'\033[2m' B=$'\033[1m' R=$'\033[0m'
+  [ -z "$target" ] && { printf "\n  ${Y}Usage: killport cert <host:port> or <domain>${R}\n\n"; return 1; }
+  command -v openssl &>/dev/null || { printf "\n  ${Y}openssl not found.${R}\n\n"; return 1; }
+
+  local host port
+  if [[ "$target" == *:* ]]; then host="${target%:*}"; port="${target##*:}"
+  else host="$target"; port="443"; fi
+
+  printf "\n${B}${C}  killport cert${R}  ${D}%s:%s${R}\n" "$host" "$port"
+  printf "${C}  ────────────────────────────────────────────${R}\n\n"
+  printf "  ${D}Connecting...${R}\n\n"
+
+  local raw_cert hs
+  raw_cert=$(echo "" | timeout 6 openssl s_client -connect "${host}:${port}" \
+    -servername "$host" 2>/dev/null) || true
+  hs=$(echo "$raw_cert" | grep -E "Protocol|Cipher" | head -4 || true)
+  local cert_info
+  cert_info=$(echo "$raw_cert" | openssl x509 -noout \
+    -subject -issuer -dates -fingerprint -ext subjectAltName 2>/dev/null) || true
+
+  if [ -z "$cert_info" ]; then
+    printf "  ${RE}Could not retrieve certificate from %s:%s${R}\n\n" "$host" "$port"; return 1
+  fi
+
+  local not_after subject issuer
+  not_after=$(grep "notAfter"   <<< "$cert_info" | cut -d= -f2 || true)
+  subject=$(grep   "^subject"   <<< "$cert_info" | sed 's/subject=//' || true)
+  issuer=$(grep    "^issuer"    <<< "$cert_info" | sed 's/issuer=//'  || true)
+  local sans=()
+  while IFS= read -r s; do
+    [[ "$s" == *"DNS:"* ]] && sans+=("$(echo "$s" | tr ',' '\n' | grep "DNS:" | sed 's/.*DNS://;s/ //g')")
+  done < <(grep -A2 "subjectAltName" <<< "$cert_info" | tail -1 | tr ',' '\n' || true)
+
+  local days_left="" exp_color="$G"
+  if [ -n "$not_after" ]; then
+    local exp_epoch now_epoch
+    if date -j &>/dev/null 2>&1; then
+      exp_epoch=$(date -j -f "%b %d %T %Y %Z" "$not_after" "+%s" 2>/dev/null) || exp_epoch=""
+    else
+      exp_epoch=$(date -d "$not_after" "+%s" 2>/dev/null) || exp_epoch=""
+    fi
+    now_epoch=$(date "+%s")
+    [ -n "$exp_epoch" ] && days_left=$(( (exp_epoch - now_epoch) / 86400 ))
+    [ -n "$days_left" ] && [ "$days_left" -lt 90 ] && exp_color="$Y"
+    [ -n "$days_left" ] && [ "$days_left" -lt 30 ] && exp_color="$RE"
+  fi
+
+  printf "  ${B}Subject :${R}  ${D}%s${R}\n" "$subject"
+  printf "  ${B}Issuer  :${R}  ${D}%s${R}\n" "$issuer"
+  printf "  ${B}Expires :${R}  ${exp_color}%s" "$not_after"
+  [ -n "$days_left" ] && printf "  (%d days)" "$days_left"
+  printf "${R}\n"
+
+  if [ "${#sans[@]}" -gt 0 ]; then
+    printf "  ${B}SANs    :${R}\n"
+    for s in "${sans[@]}"; do
+      while IFS= read -r san; do [ -n "$san" ] && printf "    ${D}%s${R}\n" "$san"; done <<< "$s"
+    done
+  fi
+
+  if [ -n "$hs" ]; then
+    printf "\n"
+    while IFS= read -r line; do [ -n "$line" ] && printf "  ${D}%s${R}\n" "$line"; done <<< "$hs"
+  fi
+  printf "\n"
+}
+
+# ── sniff ────────────────────────────────────────────────
+
+sniff_port() {
+  local port="${1:-}"
+  local C=$'\033[0;36m' Y=$'\033[0;33m' D=$'\033[2m' B=$'\033[1m' R=$'\033[0m'
+  [ -z "$port" ] && { printf "\n  ${Y}Usage: killport sniff <port>${R}\n\n"; return 1; }
+  command -v tcpdump &>/dev/null || { printf "\n  ${Y}tcpdump required:  brew install tcpdump / apt install tcpdump${R}\n\n"; return 1; }
+
+  printf "\n${B}${C}  killport sniff${R}  ${D}port %s  (Ctrl+C to stop)${R}\n" "$port"
+  printf "${C}  ────────────────────────────────────────────${R}\n\n"
+  printf "  ${D}Capturing on port %s. Requires sudo.${R}\n\n" "$port"
+
+  local _stty; _stty=$(stty -g 2>/dev/null) || _stty=""
+  trap '[ -n "$_stty" ] && stty "$_stty" 2>/dev/null || stty sane 2>/dev/null; printf "\n\n"; exit 0' INT TERM
+
+  sudo tcpdump -l -n -q "port $port" 2>/dev/null | while IFS= read -r line; do
+    local ts="${line%% *}" rest="${line#* }"
+    printf "  ${D}%s${R}  %s\n" "$ts" "$rest"
+  done
+}
+
+# ── vuln ─────────────────────────────────────────────────
+
+vuln_check() {
+  local target="${1:-}"
+  local C=$'\033[0;36m' G=$'\033[0;32m' Y=$'\033[0;33m'
+  local RE=$'\033[0;31m' D=$'\033[2m' B=$'\033[1m' R=$'\033[0m'
+  if [ -z "$target" ] || [[ "$target" != *:* ]]; then
+    printf "\n  ${Y}Usage: killport vuln <ip:port>${R}\n\n"; return 1
+  fi
+  command -v nmap &>/dev/null || { printf "\n  ${Y}nmap required for version detection.${R}\n\n"; return 1; }
+
+  local host="${target%:*}" port="${target##*:}"
+  printf "\n${B}${C}  killport vuln${R}  ${D}%s${R}\n" "$target"
+  printf "${C}  ────────────────────────────────────────────${R}\n\n"
+  printf "  ${D}Detecting service on port %s...${R}\n\n" "$port"
+
+  local nmap_out; nmap_out=$(nmap -sV -p "$port" --open -T4 "$host" 2>/dev/null)
+  local svc_line; svc_line=$(grep "${port}/tcp" <<< "$nmap_out" | head -1 || true)
+  local svc; svc=$(awk '{print $3}' <<< "$svc_line")
+  local ver; ver=$(awk '{$1=$2=$3=""; print $0}' <<< "$svc_line" | sed 's/^ *//')
+
+  if [ -z "$svc" ] || [ "$svc" = "open" ]; then
+    printf "  ${Y}Could not detect service on %s:%s${R}\n\n" "$host" "$port"; return 1
+  fi
+
+  printf "  ${B}Service:${R}  %s\n" "$svc"
+  printf "  ${B}Version:${R}  ${D}%s${R}\n\n" "${ver:-unknown}"
+  printf "  ${D}Querying NVD database...${R}\n\n"
+
+  local query="${svc} ${ver%% *}"
+  local enc_query; enc_query=$(python3 -c \
+    "import urllib.parse,sys; print(urllib.parse.quote(sys.argv[1]))" \
+    "$query" 2>/dev/null || printf '%s' "$query" | sed 's/ /+/g')
+  local nvd_resp; nvd_resp=$(curl -sfL --max-time 12 \
+    "https://services.nvd.nist.gov/rest/json/cves/2.0?keywordSearch=${enc_query}&resultsPerPage=10" \
+    2>/dev/null || true)
+
+  if [ -z "$nvd_resp" ]; then
+    printf "  ${Y}Could not reach NVD API (check internet connection).${R}\n\n"; return 1
+  fi
+
+  python3 - "$nvd_resp" << 'VULNEOF'
+import sys, json
+data = sys.argv[1]
+B="\033[1m"; D="\033[2m"; G="\033[0;32m"; Y="\033[0;33m"; RE="\033[0;31m"; R="\033[0m"
+SC={"CRITICAL":RE,"HIGH":RE,"MEDIUM":Y,"LOW":G,"NONE":D}
+try:
+    obj = json.loads(data)
+    vulns = obj.get("vulnerabilities",[])
+    total = obj.get("totalResults", len(vulns))
+    if not vulns:
+        print(f"  {G}No CVEs found for this service/version.{R}\n"); sys.exit(0)
+    print(f"  {B}{total}{R} CVE(s) found — showing top {len(vulns)}:\n")
+    for v in vulns:
+        c = v.get("cve",{})
+        cid = c.get("id","?")
+        desc = next((d["value"] for d in c.get("descriptions",[]) if d.get("lang")=="en"),"")[:120]
+        sev,score="UNKNOWN",""
+        for mk in ("cvssMetricV31","cvssMetricV30","cvssMetricV2"):
+            if mk in c.get("metrics",{}):
+                m0=c["metrics"][mk][0]; cd=m0.get("cvssData",{})
+                sev=cd.get("baseSeverity",m0.get("baseSeverity","?")); score=str(cd.get("baseScore",""))
+                break
+        sc=SC.get(sev.upper(),D)
+        print(f"  {B}{cid}{R}  {sc}[{sev}  {score}]{R}")
+        print(f"  {D}{desc}{'...' if len(desc)==120 else ''}{R}\n")
+except Exception as e:
+    print(f"  Error parsing CVE data: {e}")
+VULNEOF
+}
+
+# ── audit ────────────────────────────────────────────────
+
+audit_firewall() {
+  local C=$'\033[0;36m' G=$'\033[0;32m' Y=$'\033[0;33m'
+  local RE=$'\033[0;31m' D=$'\033[2m' B=$'\033[1m' R=$'\033[0m'
+
+  printf "\n${B}${C}  killport audit${R}  ${D}firewall rule review${R}\n"
+  printf "${C}  ────────────────────────────────────────────${R}\n\n"
+
+  local rules=""
+  rules=$(sudo pfctl -sr 2>/dev/null || sudo pfctl -s rules 2>/dev/null || true)
+
+  if [ -z "$rules" ]; then
+    printf "  ${Y}No firewall rules found (pfctl returned nothing or insufficient permissions).${R}\n"
+    printf "  ${D}Try: sudo killport audit${R}\n\n"; return 0
+  fi
+
+  printf "  ${B}Rules:${R}\n\n"
+  while IFS= read -r line; do [ -n "$line" ] && printf "  ${D}  %s${R}\n" "$line"; done <<< "$rules"
+  printf "\n  ${B}Findings:${R}\n\n"
+
+  local findings=0
+  # Catch-all accept
+  if grep -qiE "^pass (all|in all|out all)" <<< "$rules"; then
+    printf "  ${RE}⚠  Catch-all pass rule — all traffic is allowed by default.${R}\n"; findings=1; fi
+  # Dangerous exposed ports
+  for dp_port in 22 3306 5432 6379 27017 9200 11211; do
+    if grep -qE "\b${dp_port}\b" <<< "$rules"; then
+      local sn=""
+      case "$dp_port" in 22) sn="SSH";; 3306) sn="MySQL";; 5432) sn="PostgreSQL";;
+        6379) sn="Redis";; 27017) sn="MongoDB";; 9200) sn="Elasticsearch";; 11211) sn="Memcached";; esac
+      printf "  ${Y}⚠  Port %s (%s) referenced — confirm it's restricted to trusted IPs.${R}\n" "$dp_port" "$sn"
+      findings=1
+    fi
+  done
+  # Logging
+  if grep -qi "log" <<< "$rules"; then
+    printf "  ${G}✓  Logging rules present.${R}\n"
+  else
+    printf "  ${Y}⚠  No logging rules — consider adding 'log' to firewall rules.${R}\n"; findings=1; fi
+  # Tables (allowlists)
+  if grep -qi "<" <<< "$rules"; then
+    printf "  ${G}✓  IP tables/allowlists in use.${R}\n"; fi
+
+  [ "$findings" -eq 0 ] && printf "  ${G}✓  No critical issues detected.${R}\n"
+  printf "\n  ${D}Run 'killport ports' to cross-reference currently exposed ports.${R}\n\n"
+}
+
+# ── dns ──────────────────────────────────────────────────
+
+dns_recon() {
+  local domain="${1:-}"
+  local C=$'\033[0;36m' G=$'\033[0;32m' Y=$'\033[0;33m'
+  local RE=$'\033[0;31m' D=$'\033[2m' B=$'\033[1m' R=$'\033[0m'
+  [ -z "$domain" ] && { printf "\n  ${Y}Usage: killport dns <domain>${R}\n\n"; return 1; }
+
+  printf "\n${B}${C}  killport dns${R}  ${D}%s${R}\n" "$domain"
+  printf "${C}  ────────────────────────────────────────────${R}\n\n"
+
+  local has_dig=0; command -v dig &>/dev/null && has_dig=1
+
+  _kp_dns_query() {
+    local type="$1" tgt="$2"
+    if [ "$has_dig" -eq 1 ]; then
+      dig +short "$type" "$tgt" 2>/dev/null | grep -v "^$" || true
+    else
+      host -t "$type" "$tgt" 2>/dev/null | grep -v "NXDOMAIN\|not found\|no.*record" || true
+    fi
+  }
+
+  _kp_show_recs() {
+    local label="$1"; shift
+    printf "  ${B}%-8s${R}" "$label"
+    local first=1
+    while IFS= read -r rec; do
+      [ -z "$rec" ] && continue
+      if [ "$first" -eq 1 ]; then printf "  ${D}%s${R}\n" "$rec"; first=0
+      else printf "  ${D}%8s  %s${R}\n" "" "$rec"; fi
+    done
+    [ "$first" -eq 1 ] && printf "  ${D}(none)${R}\n"
+  }
+
+  _kp_dns_query A    "$domain" | _kp_show_recs "A"
+  _kp_dns_query AAAA "$domain" | _kp_show_recs "AAAA"
+  _kp_dns_query MX   "$domain" | _kp_show_recs "MX"
+  _kp_dns_query NS   "$domain" | _kp_show_recs "NS"
+  _kp_dns_query TXT  "$domain" | _kp_show_recs "TXT"
+
+  # Reverse DNS for A records
+  local a_list=()
+  while IFS= read -r ip; do [ -n "$ip" ] && a_list+=("$ip"); done \
+    < <(_kp_dns_query A "$domain")
+  if [ "${#a_list[@]}" -gt 0 ]; then
+    printf "  ${B}%-8s${R}\n" "REVERSE"
+    for ip in "${a_list[@]}"; do
+      local rev=""
+      if [ "$has_dig" -eq 1 ]; then rev=$(dig +short -x "$ip" 2>/dev/null | head -1 || true)
+      else rev=$(host "$ip" 2>/dev/null | awk '/domain name/{print $NF}' | head -1 || true); fi
+      printf "    ${D}%s  →  %s${R}\n" "$ip" "${rev:-(no PTR)}"
+    done
+    printf "\n"
+  fi
+
+  # Zone transfer test
+  printf "  ${B}%-8s${R}\n" "AXFR"
+  local ns_list=() axfr_ok=0
+  while IFS= read -r ns; do [ -n "$ns" ] && ns_list+=("$ns"); done \
+    < <(_kp_dns_query NS "$domain")
+  for ns in "${ns_list[@]:-}"; do
+    [ -z "$ns" ] && continue
+    ns="${ns%.}"
+    local axfr_out=""
+    if [ "$has_dig" -eq 1 ]; then
+      axfr_out=$(dig AXFR "$domain" "@$ns" 2>/dev/null || true)
+    else
+      axfr_out=$(host -l "$domain" "$ns" 2>/dev/null || true)
+    fi
+    if echo "$axfr_out" | grep -qvE "Transfer failed|REFUSED|timed out|no servers|; <<>>"; then
+      printf "    ${RE}⚠  ALLOWED from %s — misconfiguration!${R}\n" "$ns"; axfr_ok=1; fi
+  done
+  [ "$axfr_ok" -eq 0 ] && printf "    ${G}✓  Zone transfers blocked.${R}\n"
+  printf "\n"
+}
+
+# ── forward ──────────────────────────────────────────────
+
+forward_port() {
+  local local_port="${1:-}" target="${2:-}"
+  local C=$'\033[0;36m' G=$'\033[0;32m' Y=$'\033[0;33m'
+  local RE=$'\033[0;31m' D=$'\033[2m' B=$'\033[1m' R=$'\033[0m'
+  if [ -z "$local_port" ] || [ -z "$target" ]; then
+    printf "\n  ${Y}Usage: killport forward <local-port> <host:port>${R}\n"
+    printf "  ${D}Example: killport forward 8080 192.168.1.10:80${R}\n\n"; return 1
+  fi
+  [[ "$target" == *:* ]] || { printf "\n  ${Y}Target must be host:port${R}\n\n"; return 1; }
+  local t_host="${target%:*}" t_port="${target##*:}"
+
+  printf "\n${B}${C}  killport forward${R}  ${D}localhost:%s  →  %s${R}\n" "$local_port" "$target"
+  printf "${C}  ────────────────────────────────────────────${R}\n\n"
+
+  local _stty; _stty=$(stty -g 2>/dev/null) || _stty=""
+  trap '[ -n "$_stty" ] && stty "$_stty" 2>/dev/null || stty sane 2>/dev/null
+        printf "\n  ${D}Forward stopped.${R}\n\n"; exit 0' INT TERM
+
+  if command -v socat &>/dev/null; then
+    printf "  ${G}✓${R}  ${D}socat${R}  —  forwarding port %s to %s\n" "$local_port" "$target"
+    printf "  ${D}Press Ctrl+C to stop.${R}\n\n"
+    socat "TCP-LISTEN:${local_port},fork,reuseaddr" "TCP:${t_host}:${t_port}"
+  elif command -v nc &>/dev/null; then
+    printf "  ${Y}socat not found — using nc (single connection at a time)${R}\n"
+    printf "  ${D}Install socat for full support:  brew install socat${R}\n\n"
+    printf "  ${D}Press Ctrl+C to stop.${R}\n\n"
+    while true; do nc -l "$local_port" | nc "$t_host" "$t_port" || true; done
+  else
+    printf "  ${RE}Neither socat nor nc found.${R}\n"
+    printf "  ${D}Install socat:  brew install socat${R}\n\n"; return 1
+  fi
+}
+
 # -------------------------------------------------------
 
 if [ $# -eq 0 ]; then
@@ -1556,6 +1967,15 @@ if [ $# -eq 0 ]; then
   echo "  killport opencheck <ip>    probe an IP from this machine to check open ports"
   echo "  killport status <port>     show if a port is open or closed"
   echo "  killport ip                show IP addresses, DNS, and network info"
+  echo "  killport scan <ip>         scan ports on a remote host (no AI)"
+  echo "  killport scan <ip> all     scan all 65535 ports on a remote host"
+  echo "  killport watch <port>      monitor live connections to a local port"
+  echo "  killport cert <host:port>  inspect TLS certificate (expiry, SANs, cipher)"
+  echo "  killport sniff <port>      capture and display traffic on a port"
+  echo "  killport vuln <ip:port>    detect service version + query CVE database"
+  echo "  killport audit             review firewall rules with plain-English findings"
+  echo "  killport dns <domain>      DNS recon: A/MX/TXT/NS/AXFR zone transfer test"
+  echo "  killport forward <p> <h:p> forward a local port to a remote host:port"
   echo "  killport attack <ip>       AI pentest: scan all ports + analysis"
   echo "  killport attack <ip>:port  AI pentest: scan single port + analysis"
   echo "  killport attack config     configure Ollama host and model"
@@ -1568,6 +1988,38 @@ if [ $# -eq 0 ]; then
 fi
 
 case "$1" in
+
+  scan)
+    scan_run "${2:-}" "${3:-}"
+    ;;
+
+  watch)
+    watch_port "${2:-}"
+    ;;
+
+  cert)
+    cert_check "${2:-}"
+    ;;
+
+  sniff)
+    sniff_port "${2:-}"
+    ;;
+
+  vuln)
+    vuln_check "${2:-}"
+    ;;
+
+  audit)
+    audit_firewall
+    ;;
+
+  dns)
+    dns_recon "${2:-}"
+    ;;
+
+  forward)
+    forward_port "${2:-}" "${3:-}"
+    ;;
 
   attack)
     attack_dispatch "${2:-}"
