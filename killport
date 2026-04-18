@@ -2,7 +2,7 @@
 
 set -euo pipefail
 
-VERSION="1.7.0"
+VERSION="1.7.1"
 REPO="skosari/killport-mac"
 RAW="https://raw.githubusercontent.com/${REPO}/main"
 API="https://api.github.com/repos/${REPO}/contents"
@@ -835,7 +835,8 @@ attack_run() {
   fi
 
   # ── Agentic investigation ─────────────────────────────
-  local py_agent; py_agent=$(mktemp /tmp/kp_agent_XXXXXX.py)
+  local py_agent="/tmp/kp_agent_$$_$RANDOM.py"
+  trap 'rm -f "$py_agent" 2>/dev/null' EXIT INT TERM
   cat > "$py_agent" <<'PYEOF'
 import json, os, sys, subprocess, re, time, datetime
 
@@ -1311,7 +1312,8 @@ for line in report.splitlines():
 sys.stderr.write(report)
 PYEOF
 
-  local log_tmp; log_tmp=$(mktemp /tmp/kp_log_XXXXXX.txt)
+  local log_tmp="/tmp/kp_log_$$_$RANDOM.txt"
+  trap 'rm -f "$py_agent" "$log_tmp" 2>/dev/null' EXIT INT TERM
   KP_OLLAMA="$ATTACK_OLLAMA" KP_MODEL="$MODEL" KP_TARGET="$TARGET" \
     KP_SERVICES="$service_lines" python3 "$py_agent" 2>"$log_tmp" || true
 
