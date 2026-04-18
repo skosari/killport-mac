@@ -1640,8 +1640,10 @@ cert_check() {
   printf "${C}  ────────────────────────────────────────────${R}\n\n"
   printf "  ${D}Connecting...${R}\n\n"
 
-  local raw_cert hs
-  raw_cert=$(echo "" | timeout 6 openssl s_client -connect "${host}:${port}" \
+  local raw_cert hs _to=""
+  command -v gtimeout &>/dev/null && _to="gtimeout 6"
+  command -v timeout  &>/dev/null && _to="timeout 6"
+  raw_cert=$(echo "Q" | ${_to} openssl s_client -connect "${host}:${port}" \
     -servername "$host" 2>/dev/null) || true
   hs=$(echo "$raw_cert" | grep -E "Protocol|Cipher" | head -4 || true)
   local cert_info
@@ -1914,7 +1916,8 @@ dns_recon() {
     else
       axfr_out=$(host -l "$domain" "$ns" 2>/dev/null || true)
     fi
-    if echo "$axfr_out" | grep -qvE "Transfer failed|REFUSED|timed out|no servers|; <<>>"; then
+    if [ -n "$axfr_out" ] && echo "$axfr_out" | grep -qE "\bSOA\b|[[:space:]]IN[[:space:]]" \
+        && ! echo "$axfr_out" | grep -qE "Transfer failed|REFUSED|timed out|no servers"; then
       printf "    ${RE}⚠  ALLOWED from %s — misconfiguration!${R}\n" "$ns"; axfr_ok=1; fi
   done
   [ "$axfr_ok" -eq 0 ] && printf "    ${G}✓  Zone transfers blocked.${R}\n" || true
