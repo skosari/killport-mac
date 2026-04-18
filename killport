@@ -2,7 +2,7 @@
 
 set -euo pipefail
 
-VERSION="1.8.1"
+VERSION="1.8.2"
 REPO="skosari/killport-mac"
 RAW="https://raw.githubusercontent.com/${REPO}/main"
 API="https://api.github.com/repos/${REPO}/contents"
@@ -1136,19 +1136,44 @@ def tool_crack(h):
     return result
 
 # ── Ollama helpers ────────────────────────────────────────
-def ollama_chat(msgs, stream=False):
-    payload=json.dumps({"model":MODEL,"messages":msgs,"stream":stream})
-    r=subprocess.run(["curl","-sN",f"http://{OLLAMA}/api/chat",
-        "-H","Content-Type: application/json","--data-binary",payload],
-        capture_output=True,text=True,timeout=90)
-    if stream: return r.stdout
+def ollama_chat(msgs):
+    """Stream response from Ollama, display live token progress, strip think blocks."""
+    payload=json.dumps({"model":MODEL,"messages":msgs,"stream":True})
     try:
-        content=json.loads(r.stdout)["message"]["content"]
-        content=re.sub(r'<think>.*?</think>','',content,flags=re.DOTALL)  # complete blocks
-        content=re.sub(r'^.*?</think>\s*','',content,flags=re.DOTALL)     # orphaned </think> (no opening tag)
-        content=re.sub(r'<think>.*$','',content,flags=re.DOTALL)          # orphaned <think> (no closing tag)
-        return content.strip()
-    except: return ""
+        proc=subprocess.Popen(
+            ["curl","-sN",f"http://{OLLAMA}/api/chat",
+             "-H","Content-Type: application/json","--data-binary",payload],
+            stdout=subprocess.PIPE,stderr=subprocess.DEVNULL,text=True)
+    except Exception: return ""
+    full=""; tok=0; in_think=False
+    SP=["⠋","⠙","⠹","⠸","⠼","⠴","⠦","⠧","⠇","⠏"]
+    try:
+        for raw in iter(proc.stdout.readline,""):
+            raw=raw.strip()
+            if not raw: continue
+            try:
+                obj=json.loads(raw)
+                t=obj.get("message",{}).get("content","")
+                if t:
+                    full+=t; tok+=1
+                    if "<think>" in t: in_think=True
+                    if "</think>" in t: in_think=False
+                    lbl="thinking" if in_think else "generating"
+                    sys.stdout.write(f"\r  {D}{SP[tok%len(SP)]}  {tok} tokens  [{lbl}]{R}   ")
+                    sys.stdout.flush()
+                if obj.get("done",False): break
+            except json.JSONDecodeError: pass
+    except Exception: pass
+    finally:
+        try: proc.stdout.close()
+        except: pass
+        try: proc.wait(timeout=5)
+        except: proc.kill()
+    sys.stdout.write("\r"+" "*50+"\r"); sys.stdout.flush()
+    full=re.sub(r'<think>.*?</think>','',full,flags=re.DOTALL)
+    full=re.sub(r'^.*?</think>\s*','',full,flags=re.DOTALL)
+    full=re.sub(r'<think>.*$','',full,flags=re.DOTALL)
+    return full.strip()
 
 def ai_report(case_file):
     now = datetime.datetime.now().strftime("%Y-%m-%d %H:%M")
@@ -1242,9 +1267,8 @@ for line in INITIAL.splitlines():
 itr=0
 while itr < MAX_IT:
     itr+=1
-    sys.stdout.write(f"  {D}[{itr}/{MAX_IT}] reasoning...{R}   \r"); sys.stdout.flush()
+    print(f"  {D}[{itr}/{MAX_IT}]{R}",end="  ",flush=True)
     reply=ollama_chat(msgs)
-    sys.stdout.write("  "+" "*50+"\r"); sys.stdout.flush()
 
     # Show Thought so user sees the AI reasoning
     thought_m=re.search(r'Thought:\s*(.+?)(?=\nAction:|\Z)',reply,re.DOTALL|re.IGNORECASE)
@@ -1296,9 +1320,10 @@ PYEOF
 
   local log_tmp="/tmp/kp_log_$$_$RANDOM.txt"
   local _saved_stty; _saved_stty=$(stty -g 2>/dev/null) || _saved_stty=""
-  trap 'rm -f "$py_agent" "$log_tmp" 2>/dev/null; [ -n "$_saved_stty" ] && stty "$_saved_stty" 2>/dev/null || stty sane 2>/dev/null || true' EXIT INT TERM
+  trap 'rm -f "${py_agent:-}" "${log_tmp:-}" 2>/dev/null; stty sane 2>/dev/null || true' EXIT INT TERM
   KP_OLLAMA="$ATTACK_OLLAMA" KP_MODEL="$MODEL" KP_TARGET="$TARGET" \
     KP_SERVICES="$service_lines" KP_DEPTH="$KP_DEPTH" python3 "$py_agent" 2>"$log_tmp" || true
+  trap - EXIT INT TERM
   [ -n "$_saved_stty" ] && stty "$_saved_stty" 2>/dev/null || stty sane 2>/dev/null || true
 
   local report_text=""
