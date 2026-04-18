@@ -2,7 +2,7 @@
 
 set -euo pipefail
 
-VERSION="1.7.4"
+VERSION="1.7.5"
 REPO="skosari/killport-mac"
 RAW="https://raw.githubusercontent.com/${REPO}/main"
 API="https://api.github.com/repos/${REPO}/contents"
@@ -834,6 +834,21 @@ attack_run() {
     return 0
   fi
 
+  # ── Wordlist depth ────────────────────────────────────
+  printf "\n  ${B}Credential testing depth:${R}\n\n"
+  printf "    ${B}1  quick ${R}  ${D}~30 sec   top 3 users × 5 passwords${R}\n"
+  printf "    ${B}2  common${R}  ${D}~2 min    top 5 users × 10 passwords${R}  ${G}(default)${R}\n"
+  printf "    ${B}3  deep  ${R}  ${D}~10 min   top 10 users × 30 passwords${R}\n"
+  printf "\n  ${D}Press Enter for default, or type 1 / 2 / 3:${R}\n  → "
+  read -r _depth_sel
+  local KP_DEPTH="common"
+  case "${_depth_sel:-2}" in
+    1|quick)  KP_DEPTH="quick"  ;;
+    3|deep)   KP_DEPTH="deep"   ;;
+    *)        KP_DEPTH="common" ;;
+  esac
+  printf "\n"
+
   # ── Agentic investigation ─────────────────────────────
   local py_agent="/tmp/kp_agent_$$_$RANDOM.py"
   trap 'rm -f "$py_agent" 2>/dev/null' EXIT INT TERM
@@ -844,7 +859,24 @@ OLLAMA  = os.environ["KP_OLLAMA"]
 MODEL   = os.environ["KP_MODEL"]
 TARGET  = os.environ["KP_TARGET"]
 INITIAL = os.environ["KP_SERVICES"]
+DEPTH   = os.environ.get("KP_DEPTH","common")
 MAX_IT  = 20
+
+_USERS = {
+    "quick":  ["admin","root","ubuntu"],
+    "common": ["admin","root","ubuntu","user","pi"],
+    "deep":   ["admin","root","ubuntu","user","pi","test","guest","oracle","postgres","ftp"],
+}
+_PASSES = {
+    "quick":  ["","admin","password","123456","root"],
+    "common": ["","admin","password","123456","root","1234","pass","test","guest","raspberry"],
+    "deep":   ["","admin","password","123456","root","1234","pass","test","guest","raspberry",
+               "letmein","welcome","admin123","password1","abc123","111111","ubuntu",
+               "changeme","default","qwerty","12345","12345678","dragon","master",
+               "trustno1","sunshine","raspberry","shadow","superman","football","monkey"],
+}
+TOP_USERS  = _USERS.get(DEPTH,  _USERS["common"])
+TOP_PASSES = _PASSES.get(DEPTH, _PASSES["common"])
 
 C='\033[0;36m'; G='\033[0;32m'; Y='\033[0;33m'; RE='\033[0;31m'
 D='\033[2m';    B='\033[1m';    R='\033[0m'
@@ -916,8 +948,6 @@ def fix_steps(service):
     return FIX["default"]
 
 # ── Tool implementations ─────────────────────────────────
-TOP_USERS  = ["admin","root","ubuntu","user","pi"]
-TOP_PASSES = ["","admin","password","123456","root","1234","pass","test","guest","raspberry"]
 
 def sh(cmd, inp=None, timeout=30):
     try:
@@ -1322,7 +1352,7 @@ PYEOF
   local log_tmp="/tmp/kp_log_$$_$RANDOM.txt"
   trap 'rm -f "$py_agent" "$log_tmp" 2>/dev/null' EXIT INT TERM
   KP_OLLAMA="$ATTACK_OLLAMA" KP_MODEL="$MODEL" KP_TARGET="$TARGET" \
-    KP_SERVICES="$service_lines" python3 "$py_agent" 2>"$log_tmp" || true
+    KP_SERVICES="$service_lines" KP_DEPTH="$KP_DEPTH" python3 "$py_agent" 2>"$log_tmp" || true
 
   local report_text=""
   [ -f "$log_tmp" ] && report_text=$(cat "$log_tmp")
