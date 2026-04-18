@@ -2,7 +2,7 @@
 
 set -euo pipefail
 
-VERSION="1.10.5"
+VERSION="1.10.6"
 REPO="skosari/killport-mac"
 RAW="https://raw.githubusercontent.com/${REPO}/main"
 API="https://api.github.com/repos/${REPO}/contents"
@@ -182,9 +182,13 @@ ports_inspect() {
     printf "  Firewall  ${Y}${B}DISABLED${R}  ${D}pfctl is off — all listening ports may be reachable externally${R}\n"
   fi
 
-  # Local LAN IP
-  local lan_ip
-  lan_ip=$(ifconfig -l 2>/dev/null | tr ' ' '\n' | while read -r iface; do
+  # Local LAN IP — prefer the interface used for the default gateway
+  local lan_ip _gw_iface
+  _gw_iface=$(netstat -rn 2>/dev/null | awk '/^default/{print $NF; exit}')
+  if [ -n "$_gw_iface" ]; then
+    lan_ip=$(ifconfig "$_gw_iface" 2>/dev/null | awk '/inet / && $2 != "127.0.0.1"{print $2; exit}')
+  fi
+  [ -z "$lan_ip" ] && lan_ip=$(ifconfig -l 2>/dev/null | tr ' ' '\n' | while read -r iface; do
     ifconfig "$iface" 2>/dev/null | awk '/inet / && $2 != "127.0.0.1"{print $2; exit}'
   done | head -1)
   [ -n "$lan_ip" ] && printf "  LAN IP    ${B}%s${R}\n" "$lan_ip"
@@ -296,6 +300,10 @@ show_ip() {
   local primary_iface primary_mac primary_ipv4 primary_ipv6 primary_status
   primary_iface="" primary_mac="" primary_ipv4="" primary_ipv6="" primary_status=""
 
+  # Determine the interface used for the default gateway route
+  local gw_iface
+  gw_iface=$(netstat -rn 2>/dev/null | awk '/^default/{print $NF; exit}')
+
   for iface in $(ifconfig -l 2>/dev/null); do
     info=$(ifconfig "$iface" 2>/dev/null)
     mac="";  ipv4="";  ipv6="";  status=""
@@ -305,7 +313,12 @@ show_ip() {
     status=$(printf '%s\n' "$info" | awk '/status:/{print $2; exit}')
     [ -z "$mac" ] && [ -z "$ipv4" ] && continue
 
-    # Reserve the first active interface with a real IPv4 as primary
+    # Reserve the gateway interface as primary; fall back to first active+IPv4
+    if [ "$iface" = "$gw_iface" ]; then
+      primary_iface="$iface"; primary_mac="$mac"; primary_ipv4="$ipv4"
+      primary_ipv6="$ipv6";   primary_status="$status"
+      continue
+    fi
     if [ -z "$primary_iface" ] && [ "$status" = "active" ] && [ -n "$ipv4" ] && [ "$ipv4" != "127.0.0.1" ]; then
       primary_iface="$iface"; primary_mac="$mac"; primary_ipv4="$ipv4"
       primary_ipv6="$ipv6";   primary_status="$status"
