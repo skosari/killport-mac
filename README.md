@@ -25,8 +25,7 @@
 **Option 1 — Homebrew** *(recommended)*
 
 ```sh
-brew tap skosari/killport-mac
-brew install killport
+brew install skosari/killport-mac/killport
 ```
 
 **Option 2 — curl one-liner**
