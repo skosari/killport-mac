@@ -2,7 +2,7 @@
 
 set -euo pipefail
 
-VERSION="1.7.3"
+VERSION="1.7.4"
 REPO="skosari/killport-mac"
 RAW="https://raw.githubusercontent.com/${REPO}/main"
 API="https://api.github.com/repos/${REPO}/contents"
@@ -1044,13 +1044,21 @@ def tool_wordlist(service, port):
         if "+PONG" in r.stdout:
             findings[port]["no_auth"]=True
             return "CRITICAL: Redis has NO password — fully open to anyone"
+    total=len(TOP_USERS)*len(TOP_PASSES); done=0; bar_w=30
     for user in TOP_USERS:
         for pw in TOP_PASSES:
+            done+=1
+            pct=done*100//total
+            filled=done*bar_w//total
+            bar="\u2588"*filled+"\u2591"*(bar_w-filled)
+            sys.stdout.write(f"  \033[2m[{bar}] {pct:3d}%  testing {service}/{user}\033[0m\r")
+            sys.stdout.flush()
             res=tool_try(service,port,user,pw)
             if "SUCCEEDED" in res or "ACCEPTED" in res or "NO AUTH" in res:
-                hits.append(f"  ✓ {user}:{pw or '(empty)'}  →  {res}")
+                hits.append(f"  \u2713 {user}:{pw or '(empty)'}  \u2192  {res}")
                 if len(hits)>=3: break
         if len(hits)>=3: break
+    sys.stdout.write("  " + " "*60 + "\r"); sys.stdout.flush()
     return "\n".join(hits) if hits else "no credentials from wordlist succeeded"
 
 def tool_nmap_script(port, script):
