@@ -79,12 +79,13 @@ status_port() {
   fi
 
   # Actively listening
-  local PIDS
+  local PIDS PIDS_FLAT
   PIDS=$(lsof -ti :"$PORT" 2>/dev/null || true)
+  PIDS_FLAT=$(echo "$PIDS" | tr '\n' ',' | sed 's/,$//')
   if [ -n "$PIDS" ]; then
     local NAME
-    NAME=$(echo "$PIDS" | xargs -I{} ps -p {} -o comm= 2>/dev/null | head -1 || true)
-    echo "  Listening: YES  (PID: $PIDS — $NAME)"
+    NAME=$(echo "$PIDS" | head -1 | xargs -I{} ps -p {} -o comm= 2>/dev/null | head -1 || true)
+    echo "  Listening: YES  (PID: $PIDS_FLAT — $NAME)"
   else
     echo "  Listening: NO  (nothing is running on this port)"
   fi
@@ -1565,10 +1566,10 @@ scan_run() {
       found=1
     fi
   done <<< "$raw"
-  [ "$found" -eq 0 ] && printf "  ${D}No open ports found.${R}\n"
+  [ "$found" -eq 0 ] && printf "  ${D}No open ports found.${R}\n" || true
   local lat; lat=$(grep -oE '[0-9.]+ s latency' <<< "$raw" | head -1 || true)
   printf "\n"
-  [ -n "$lat" ] && printf "  ${D}Host latency: %s${R}\n\n" "$lat"
+  [ -n "$lat" ] && printf "  ${D}Host latency: %s${R}\n\n" "$lat" || true
 }
 
 # ── watch ────────────────────────────────────────────────
@@ -1875,7 +1876,7 @@ dns_recon() {
       if [ "$first" -eq 1 ]; then printf "  ${D}%s${R}\n" "$rec"; first=0
       else printf "  ${D}%8s  %s${R}\n" "" "$rec"; fi
     done
-    [ "$first" -eq 1 ] && printf "  ${D}(none)${R}\n"
+    [ "$first" -eq 1 ] && printf "  ${D}(none)${R}\n" || true
   }
 
   _kp_dns_query A    "$domain" | _kp_show_recs "A"
@@ -1916,7 +1917,7 @@ dns_recon() {
     if echo "$axfr_out" | grep -qvE "Transfer failed|REFUSED|timed out|no servers|; <<>>"; then
       printf "    ${RE}⚠  ALLOWED from %s — misconfiguration!${R}\n" "$ns"; axfr_ok=1; fi
   done
-  [ "$axfr_ok" -eq 0 ] && printf "    ${G}✓  Zone transfers blocked.${R}\n"
+  [ "$axfr_ok" -eq 0 ] && printf "    ${G}✓  Zone transfers blocked.${R}\n" || true
   printf "\n"
 }
 
@@ -2006,11 +2007,11 @@ fix_run() {
   local _model="${ATTACK_MODEL:-}"
 
   local _py _script
-  _py=$(mktemp /tmp/kp_fix_XXXXXX.py)
-  _script=$(mktemp /tmp/kp_fix_apply_XXXXXX.sh)
+  _py=$(mktemp "${TMPDIR:-/tmp}/kp_fix.XXXXXX")
+  _script=$(mktemp "${TMPDIR:-/tmp}/kp_fix_apply.XXXXXX")
 
   local _saved_stty; _saved_stty=$(stty -g 2>/dev/null) || _saved_stty=""
-  trap 'rm -f "${_py:-}" 2>/dev/null; stty sane 2>/dev/null || true' EXIT INT TERM
+  trap 'rm -f "${_py:-}" "${_script:-}" 2>/dev/null; stty sane 2>/dev/null || true' EXIT INT TERM
 
   cat > "$_py" << 'FIXPYEOF'
 import sys,json,subprocess,os,re,datetime,platform
@@ -2269,10 +2270,13 @@ prompt=(f"Service: {SVC} {VER}\nTarget: {IP}:{PORT}\n\nTop CVEs:\n{cve_text}\n\n
         f"UPGRADE: exact command to upgrade {SVC} on this system\n"
         f"CONFIG: top 4 config hardening settings with exact values for {SVC}\n"
         f"NETWORK: ufw/iptables/pfctl commands to restrict access to this port\n\n"
-        f"Be concise. No preamble. Version-specific where possible.")
+        f"Be concise. No preamble. No markdown. No code fences. No concluding paragraph. Stop after NETWORK section. Version-specific where possible.")
 if MODEL:
     try:
-        payload=json.dumps({"model":MODEL,"messages":[{"role":"user","content":prompt}],"stream":True})
+        payload=json.dumps({"model":MODEL,"think":False,"messages":[
+            {"role":"system","content":"You are a security expert. Output ONLY exact commands and config values. No reasoning. No thinking. No explanations. Just the commands."},
+            {"role":"user","content":prompt}
+        ],"stream":True,"options":{"temperature":0}})
         proc=subprocess.Popen(["curl","-sN",f"http://{OLLAMA}/api/chat",
              "-H","Content-Type: application/json","--data-binary",payload],
             stdout=subprocess.PIPE,stderr=subprocess.DEVNULL,text=True)
@@ -2292,11 +2296,24 @@ if MODEL:
                 if obj.get("done",False): break
             except: pass
         proc.wait()
-        sys.stdout.write("\r"+" "*50+"\r"); sys.stdout.flush()
+        sys.stdout.write("\r"+" "*80+"\r\n"); sys.stdout.flush()
         full=re.sub(r'<think>.*?</think>','',full,flags=re.DOTALL)
         full=re.sub(r'^.*?</think>\s*','',full,flags=re.DOTALL)
         full=re.sub(r'<think>.*','',full,flags=re.DOTALL)
-        full=full.strip()
+        # Strip markdown code fences
+        full=re.sub(r'```\w*','',full)
+        # Strip any preamble before the first section header
+        m=re.search(r'^(UPGRADE|CONFIG|NETWORK)[:\s]',full,re.MULTILINE|re.IGNORECASE)
+        if m: full=full[m.start():]
+        # Strip trailing prose after last command/config line
+        lines=full.splitlines()
+        last_cmd=0
+        for i,l in enumerate(lines):
+            s=l.strip()
+            if s and (s.startswith('#') or re.match(r'^(UPGRADE|CONFIG|NETWORK)[:\s]',s,re.I)
+                      or any(w in s for w in ('sudo','apt','yum','brew','systemctl','service ','iptables','ufw','pfctl','=','Protocol','Permit','Allow','Deny','Max','Client','Log','Cipher','Port ','ssh','sshd'))):
+                last_cmd=i
+        full='\n'.join(lines[:last_cmd+1]).strip()
         if full:
             for line in full.splitlines():
                 l=line.rstrip()
