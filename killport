@@ -2,7 +2,7 @@
 
 set -euo pipefail
 
-VERSION="1.7.5"
+VERSION="1.8.0"
 REPO="skosari/killport-mac"
 RAW="https://raw.githubusercontent.com/${REPO}/main"
 API="https://api.github.com/repos/${REPO}/contents"
@@ -1149,143 +1149,81 @@ def ollama_chat(msgs, stream=False):
         return content.strip()
     except: return ""
 
-def ollama_describe(port, data):
-    """Ask Ollama for a 2-sentence plain-English description of this service's risk."""
-    svc  = data["service"] or f"unknown (port {port})"
-    ver  = data["version"]
-    no_a = data["no_auth"]
-    creds= data["creds_ok"]
-    msgs=[
-        {"role":"system","content":"You are a friendly security advisor. Answer in exactly 2 short sentences, plain English, no jargon, no bullet points."},
+def ai_report(case_file):
+    now = datetime.datetime.now().strftime("%Y-%m-%d %H:%M")
+    header = [
+        "═"*62,
+        f"  SECURITY REPORT  ·  {TARGET}  ·  {now}",
+        f"  Model: {MODEL}",
+        "═"*62,
+        ""
+    ]
+    port_lines = []
+    for port,data in sorted(findings.items(),key=lambda x:int(x[0]) if x[0].isdigit() else 0):
+        rl = risk_level(data)
+        svc = data["service"] or "unknown"
+        ver = f" ({data['version']})" if data["version"] else ""
+        issues = []
+        if data["no_auth"]: issues.append("NO PASSWORD — anyone can connect")
+        for c in data["creds_ok"]: issues.append(f"weak credential works: {c}")
+        for c in data["cracked"]: issues.append(f"hash cracked: {c}")
+        if data["paths_found"]: issues.append(f"exposed paths: {', '.join(data['paths_found'][:3])}")
+        status = "; ".join(issues) if issues else "open, no critical issues found"
+        port_lines.append(f"  Port {port} — {svc.upper()}{ver}  [{RISK_ICON[rl]}]  {status}")
+    case_text = "\n\n".join(case_file) if case_file else "Initial scan only."
+    report_msgs = [
+        {"role":"system","content":(
+            "You are a security analyst writing a penetration test report. "
+            "Write in clear plain English that a non-technical person can understand. "
+            "Do not use markdown # headers. Use plain section labels in ALL CAPS."
+        )},
         {"role":"user","content":(
-            f"Port {port} is running {svc} {ver}. "
-            + ("It has NO password — anyone can connect. " if no_a else "")
-            + (f"These credentials worked: {', '.join(creds)}. " if creds else "")
-            + "In 2 plain sentences, explain to a non-technical person what risk this poses."
+            f"Target: {TARGET}\n\n"
+            "Port overview:\n" + "\n".join(port_lines) + "\n\n"
+            f"Full investigation log:\n{case_text[:5000]}\n\n"
+            "Write a complete security report with exactly these four sections:\n"
+            "EXECUTIVE SUMMARY\n"
+            "FINDINGS (cover each port: service name, risk level, plain-English explanation)\n"
+            "WHAT TO DO FIRST (numbered list, most critical action first)\n"
+            "ADDITIONAL HARDENING (3-5 general recommendations)"
         )}
     ]
-    return ollama_chat(msgs).strip()
+    body = ollama_chat(report_msgs)
+    return "\n".join(header) + body + "\n"
 
-# ── Report renderer ───────────────────────────────────────
-def render_report():
-    now = datetime.datetime.now().strftime("%Y-%m-%d %H:%M")
-    lines=[]
-    lines.append("═"*62)
-    lines.append(f"  SECURITY REPORT  ·  {TARGET}  ·  {now}")
-    lines.append(f"  Model: {MODEL}")
-    lines.append("═"*62)
+# ── Agent (ReAct loop) ────────────────────────────────────
+SYSTEM="""You are an autonomous security agent performing an authorized penetration test.
 
-    priority=[]  # (risk_order, port, data)
-    RISK_ORDER={"critical":0,"high":1,"medium":2,"low":3}
+Each response MUST follow this exact two-line format:
+Thought: <your reasoning about findings so far and what to do next>
+Action: TOOL_NAME arg1 arg2
 
-    for port,data in sorted(findings.items(),key=lambda x:int(x[0]) if x[0].isdigit() else 0):
-        data["port"]=port
-        rl = risk_level(data)
-        priority.append((RISK_ORDER[rl], port, data, rl))
+Available actions:
+  SCAN_PORT <port>                 detailed version + script scan
+  BANNER_GRAB <port>               grab raw service banner
+  HTTP_PROBE <port> <path>         fetch a specific URL path
+  HTTP_PATHS <port>                check common sensitive paths
+  TRY_CREDS <svc> <port> <u> <p>  test a single credential
+  WORDLIST <svc> <port>            brute-force common credentials
+  NMAP_SCRIPT <port> <script>      run an nmap NSE script
+  CRACK_HASH <hash>                crack a password hash
+  REPORT                           write the final report (call when done)
 
-    priority.sort(key=lambda x:x[0])
-
-    for _,port,data,rl in priority:
-        svc = data["service"] or "unknown"
-        ver = f"  ({data['version']})" if data["version"] else ""
-        lines.append("")
-        lines.append(f"  PORT {port} — {svc.upper()}{ver}")
-        lines.append(f"  Risk: {RISK_ICON[rl]}")
-        lines.append("  " + "─"*48)
-
-        # credential / auth findings
-        if data["no_auth"]:
-            lines.append(f"  ⚠  NO PASSWORD REQUIRED — anyone on the network can connect")
-        for cred in data["creds_ok"]:
-            lines.append(f"  ⚠  WEAK CREDENTIAL WORKS: {cred}")
-        for cracked in data["cracked"]:
-            lines.append(f"  ⚠  HASH CRACKED: {cracked}")
-
-        # sensitive paths
-        if data["paths_found"]:
-            lines.append(f"  Sensitive paths found:")
-            for p in data["paths_found"]:
-                lines.append(f"    {p}")
-
-        # plain-English description from Ollama
-        sys.stdout.write(f"  {D}Getting description for port {port}...{R}\r")
-        sys.stdout.flush()
-        desc = ollama_describe(port, data)
-        sys.stdout.write("  " + " "*50 + "\r")
-        sys.stdout.flush()
-        if desc:
-            lines.append("")
-            lines.append("  What this means:")
-            for sentence in desc.split(". "):
-                s = sentence.strip().rstrip(".")
-                if s: lines.append(f"    {s}.")
-
-        # fix steps
-        lines.append("")
-        lines.append("  How to fix it:")
-        for i,step in enumerate(fix_steps(svc),1):
-            lines.append(f"    {i}. {step}")
-
-    # ── What to do first ──
-    lines.append("")
-    lines.append("  " + "═"*48)
-    lines.append("  ── What to do first ──")
-    lines.append("  " + "═"*48)
-    n=1
-    for _,port,data,rl in priority:
-        svc=data["service"] or f"port {port}"
-        if data["no_auth"]:
-            lines.append(f"  {n}. [CRITICAL] Set a password on {svc} (port {port}) — it has none right now")
-            n+=1
-        for cred in data["creds_ok"]:
-            lines.append(f"  {n}. [CRITICAL] Change the password on {svc} (port {port}) — '{cred}' works")
-            n+=1
-    for _,port,data,rl in priority:
-        if rl in ("high","critical") and not data["no_auth"] and not data["creds_ok"]:
-            svc=data["service"] or f"port {port}"
-            lines.append(f"  {n}. [{rl.upper()}] Review and harden {svc} (port {port}) — see fix steps above")
-            n+=1
-    if n==1:
-        lines.append("  1. Review the fix steps for each port listed above")
-        lines.append("  2. Keep all software up to date")
-        lines.append("  3. Add firewall rules to block ports you don't need externally")
-    lines.append("")
-
-    return "\n".join(lines)
-
-# ── Agent system prompt ───────────────────────────────────
-SYSTEM="""You are an autonomous security analysis agent running an authorized penetration test.
-Investigate the target step by step using the available tools. Call ONE tool per response.
-
-Format — use EXACTLY this on its own line:
-TOOL: TOOL_NAME arg1 arg2
-
-Available tools:
-  TOOL: SCAN_PORT <port>
-  TOOL: BANNER_GRAB <port>
-  TOOL: HTTP_PROBE <port> <path>
-  TOOL: HTTP_PATHS <port>
-  TOOL: TRY_CREDS <service> <port> <user> <pass>
-  TOOL: WORDLIST <service> <port>
-  TOOL: NMAP_SCRIPT <port> <script>
-  TOOL: CRACK_HASH <hash>
-  TOOL: REPORT
-
-Strategy:
-1. SCAN_PORT and BANNER_GRAB every open port
-2. HTTP_PATHS on every web port (80,443,8080,8443 etc)
-3. WORDLIST on every auth service (ssh,ftp,redis,mysql,postgres,http)
-4. CRACK_HASH any hash you find in banners or HTTP responses
-5. When done, call TOOL: REPORT
+Guidelines:
+- SCAN_PORT and BANNER_GRAB each discovered port to identify services and versions
+- WORDLIST any authentication service: ssh, ftp, redis, mysql, postgres, http
+- HTTP_PATHS any web port (http or https)
+- Follow leads: if a banner or response contains a hash, CRACK_HASH it
+- When all services are thoroughly investigated, call Action: REPORT
 """
+
+case_file = []
 
 msgs=[
     {"role":"system","content":SYSTEM},
     {"role":"user","content":(
         f"Target: {TARGET}\n\nInitial port scan:\n{INITIAL}\n\n"
-        "Investigate each service. Use WORDLIST on auth services, "
-        "HTTP_PATHS on web ports, CRACK_HASH on any hashes found. "
-        "When finished, call TOOL: REPORT."
+        "Investigate all discovered services thoroughly, then call Action: REPORT."
     )}
 ]
 
@@ -1303,25 +1241,30 @@ for line in INITIAL.splitlines():
 itr=0
 while itr < MAX_IT:
     itr+=1
-    sys.stdout.write(f"  {D}[{itr}/{MAX_IT}] thinking...{R}   \r"); sys.stdout.flush()
+    sys.stdout.write(f"  {D}[{itr}/{MAX_IT}] reasoning...{R}   \r"); sys.stdout.flush()
     reply=ollama_chat(msgs)
     sys.stdout.write("  "+" "*50+"\r"); sys.stdout.flush()
 
-    match=re.search(r'TOOL:\s*(\S[^\n]*)',reply)
-    if not match:
-        # No tool call — done
-        break
+    # Show Thought so user sees the AI reasoning
+    thought_m=re.search(r'Thought:\s*(.+?)(?=\nAction:|\Z)',reply,re.DOTALL|re.IGNORECASE)
+    if thought_m:
+        for tl in thought_m.group(1).strip().splitlines():
+            tl=tl.strip()
+            if tl: print(f"  {D}💭 {tl}{R}",flush=True)
 
-    tool_call=match.group(1).strip()
+    # Extract action — support both Action: and legacy TOOL: formats
+    action_m=(re.search(r'Action:\s*(\S[^\n]*)',reply,re.IGNORECASE) or
+              re.search(r'TOOL:\s*(\S[^\n]*)',reply))
+    if not action_m: break
+
+    tool_call=action_m.group(1).strip()
     tool_name=tool_call.split()[0].upper()
     args=tool_call.split()[1:]
 
     print(f"  {C}▶{R}  {B}{tool_call}{R}",flush=True)
 
-    if tool_name=="REPORT":
-        break
+    if tool_name=="REPORT": break
 
-    # execute
     result="unknown tool"
     try:
         if   tool_name=="SCAN_PORT"   and args: result=tool_scan(args[0])
@@ -1335,15 +1278,16 @@ while itr < MAX_IT:
     except Exception as e:
         result=f"tool error: {e}"
 
-    short=result[:100]+("..." if len(result)>100 else "")
+    short=result[:120]+("..." if len(result)>120 else "")
     print(f"  {D}{short}{R}",flush=True)
 
+    case_file.append(f"[{tool_call}]\n{result[:1500]}")
     msgs.append({"role":"assistant","content":reply})
-    msgs.append({"role":"user","content":f"TOOL_RESULT:\n{result[:2000]}"})
+    msgs.append({"role":"user","content":f"Result:\n{result[:2000]}"})
 
-# ── Build and print report ────────────────────────────────
-print(f"\n  {B}{C}Building report...{R}\n",flush=True)
-report=render_report()
+# ── AI-written report ─────────────────────────────────────
+print(f"\n  {B}{C}Writing report...{R}\n",flush=True)
+report=ai_report(case_file)
 for line in report.splitlines():
     print(f"  {line}")
 sys.stderr.write(report)
