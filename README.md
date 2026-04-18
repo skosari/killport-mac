@@ -218,6 +218,186 @@ Uninstalling killport...
 killport uninstalled.
 ```
 
+### `killport attack config`
+```
+  Attack Config
+  ────────────────────────────────────────────
+
+  Config: /Users/sam/.config/killport/attack.conf
+
+  Ollama Host
+  Ollama is the AI engine that runs your models locally or on another machine.
+
+    • This machine:    localhost:11434  or  127.0.0.1:11434
+    • Another LAN box: 192.168.x.x:11434  (the IP of that machine)
+    • Remote server:   45.76.x.x:11434   (must have port 11434 open)
+
+  Default port is always 11434. Press Enter to keep current value.
+
+  Current: localhost:11434
+  → 
+
+  Connecting to Ollama at localhost:11434...
+  Connected.  3 model(s) available:
+
+  ▶  1  llama3.2:latest
+     2  deepseek-r1:8b
+     3  mistral:latest
+
+  0 = auto-detect (always use first loaded model)
+
+  Select model  [current: 1]
+  → 2
+
+  Saved.  Host: localhost:11434  ·  Model: deepseek-r1:8b
+```
+
+### `killport attack 192.168.1.10`
+```
+  AI Pentest  →  192.168.1.10  (47 common ports)
+  ────────────────────────────────────────────
+
+  nmap not installed — needed for port/service scanning.
+  Install it now with Homebrew? [Y/n] → y
+
+  ... (brew install nmap) ...
+
+  Connecting to Ollama at localhost:11434...
+  Model: deepseek-r1:8b
+
+  Scanning 47 common ports on 192.168.1.10...
+
+  ●  22        ssh           OpenSSH 8.9p1 Ubuntu
+  ●  80        http          Apache httpd 2.4.52
+  ●  6379      redis         Redis key-value store
+
+  Agent starting  target: 192.168.1.10  ·  model: deepseek-r1:8b
+
+  ▶  SCAN_PORT 22
+  ▶  BANNER_GRAB 6379
+  ▶  WORDLIST redis 6379
+     CRITICAL: Redis has NO password — fully open to anyone
+  ▶  HTTP_PATHS 80
+     200  /admin
+     200  /.env
+  ▶  HTTP_PROBE 80 /.env
+  ▶  WORDLIST ssh 22
+     no credentials from wordlist succeeded
+  ▶  REPORT
+
+  Building report...
+
+  ══════════════════════════════════════════════════════════════
+    SECURITY REPORT  ·  192.168.1.10  ·  2025-04-17 14:32
+    Model: deepseek-r1:8b
+  ══════════════════════════════════════════════════════════════
+
+    PORT 6379 — REDIS
+    Risk: 🔴 Critical
+    ────────────────────────────────────────────────────────────────
+    ⚠  NO PASSWORD REQUIRED — anyone on the network can connect
+
+    What this means:
+      Your Redis database has no password set.
+      Anyone on your network can read, modify, or delete all stored data.
+
+    How to fix it:
+      1. Set a strong password: add  requirepass YOURPASSWORD  to /etc/redis/redis.conf
+      2. Bind Redis to localhost only: add  bind 127.0.0.1  to redis.conf
+      3. Block port 6379 from the network with a firewall rule
+
+    PORT 80 — HTTP  (Apache httpd 2.4.52)
+    Risk: 🟠 High
+    ────────────────────────────────────────────────────────────────
+    Sensitive paths found:
+      200  /admin
+      200  /.env
+
+    What this means:
+      Your web server is exposing an admin panel and environment file publicly.
+      The .env file may contain database passwords and API keys.
+
+    How to fix it:
+      1. Move to HTTPS — plain HTTP sends all data including passwords unencrypted
+      2. Keep your web server and all plugins/software up to date
+      3. Remove or password-protect any /admin or /config pages you find
+
+    PORT 22 — SSH  (OpenSSH 8.9p1 Ubuntu)
+    Risk: 🟡 Medium
+    ────────────────────────────────────────────────────────────────
+
+    What this means:
+      SSH lets you log in remotely to manage the server.
+      If weak passwords are allowed, attackers can brute-force their way in.
+
+    How to fix it:
+      1. Disable password login — use SSH keys only
+         Edit /etc/ssh/sshd_config → set: PasswordAuthentication no
+      2. Move SSH to a non-standard port (e.g. 2222) to reduce bot noise
+      3. Install fail2ban to automatically block repeated failed logins
+
+  ══════════════════════════════════════════════════════════════
+  ── What to do first ──
+  ══════════════════════════════════════════════════════════════
+    1. [CRITICAL] Set a password on redis (port 6379) — it has none right now
+    2. [HIGH] Review and harden http (port 80) — see fix steps above
+
+  ────────────────────────────────────────────
+  Complete  ·  model: deepseek-r1:8b  ·  target: 192.168.1.10
+  Logged to: /Users/sam/.config/killport/attack.log
+```
+
+### `killport attack allports 192.168.1.10`
+```
+  AI Pentest  →  192.168.1.10  (all 65535 ports)
+  ────────────────────────────────────────────
+
+  Pass 1/2  Scanning 47 common ports on 192.168.1.10...
+
+  ●  22        ssh           OpenSSH 8.9p1
+  ●  80        http          Apache httpd 2.4.52
+
+  Pass 2/2  scanning remaining 65535 ports on 192.168.1.10...
+
+  [████████████████████░░░░░░░░░░░░░░░░░░░░]  51%
+  ●  49152     unknown
+
+  [████████████████████████████████████████] 100%
+  Pass 2/2 complete.
+
+  Agent starting  target: 192.168.1.10  ·  model: deepseek-r1:8b
+  ...
+```
+
+### `killport attack 192.168.1.10:6379`
+```
+  AI Pentest  →  192.168.1.10 : 6379
+  ────────────────────────────────────────────
+
+  Scanning port 6379 on 192.168.1.10...
+
+  ●  6379      redis         Redis key-value store
+
+  Agent starting  target: 192.168.1.10  ·  model: deepseek-r1:8b
+
+  ▶  SCAN_PORT 6379
+  ▶  WORDLIST redis 6379
+     CRITICAL: Redis has NO password — fully open to anyone
+  ▶  REPORT
+  ...
+```
+
+### `killport attack log`
+```
+  Attack Log  /Users/sam/.config/killport/attack.log
+
+  ════════════════════════════════════════════════════════════
+  Time:   2025-04-17 14:32:01  |  Target: 192.168.1.10
+  Model:  deepseek-r1:8b       |  Ports:  47 common ports
+  ════════════════════════════════════════════════════════════
+  ... (full report) ...
+```
+
 ---
 
 ## AI Penetration Testing
