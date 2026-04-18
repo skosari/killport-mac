@@ -2,7 +2,7 @@
 
 set -euo pipefail
 
-VERSION="1.10.4"
+VERSION="1.10.5"
 REPO="skosari/killport-mac"
 RAW="https://raw.githubusercontent.com/${REPO}/main"
 API="https://api.github.com/repos/${REPO}/contents"
@@ -1809,9 +1809,8 @@ audit_firewall() {
   printf "${C}  ────────────────────────────────────────────${R}\n\n"
 
   local rules=""
-  printf "  ${D}Loading firewall rules...${R}"
-  rules=$(sudo pfctl -sr 2>/dev/null || sudo pfctl -s rules 2>/dev/null || true)
-  printf "\r\033[K"
+  printf "  ${D}Loading firewall rules...${R}\n"
+  rules=$(sudo -p "  Password: " pfctl -sr 2>/dev/null || sudo -p "  Password: " pfctl -s rules 2>/dev/null || true)
 
   if [ -z "$rules" ]; then
     printf "  ${Y}No firewall rules found (pfctl returned nothing or insufficient permissions).${R}\n"
