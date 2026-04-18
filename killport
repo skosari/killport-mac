@@ -2,7 +2,7 @@
 
 set -euo pipefail
 
-VERSION="1.7.2"
+VERSION="1.7.3"
 REPO="skosari/killport-mac"
 RAW="https://raw.githubusercontent.com/${REPO}/main"
 API="https://api.github.com/repos/${REPO}/contents"
@@ -916,11 +916,8 @@ def fix_steps(service):
     return FIX["default"]
 
 # ── Tool implementations ─────────────────────────────────
-TOP_USERS  = ["admin","root","user","test","guest","ubuntu","pi","oracle","postgres","mysql","ftp"]
-TOP_PASSES = ["","admin","password","123456","1234","pass","root","toor","test","guest",
-              "letmein","welcome","admin123","password1","abc123","111111","raspberry",
-              "ubuntu","changeme","default","qwerty","12345","12345678","dragon","master",
-              "trustno1","sunshine","princess","shadow","superman","football","monkey"]
+TOP_USERS  = ["admin","root","ubuntu","user","pi"]
+TOP_PASSES = ["","admin","password","123456","root","1234","pass","test","guest","raspberry"]
 
 def sh(cmd, inp=None, timeout=30):
     try:
@@ -995,8 +992,8 @@ def tool_try(service,port,user,passwd):
     if s=="ssh":
         if not has("sshpass"): return "sshpass not installed — skipped"
         r=subprocess.run(["sshpass","-p",passwd,"ssh","-o","StrictHostKeyChecking=no",
-            "-o","ConnectTimeout=3","-o","BatchMode=no","-o","LogLevel=ERROR",
-            f"{user}@{TARGET}","exit"],capture_output=True,text=True,timeout=8)
+            "-o","ConnectTimeout=2","-o","BatchMode=no","-o","LogLevel=ERROR",
+            f"{user}@{TARGET}","exit"],capture_output=True,text=True,timeout=5)
         res="LOGIN SUCCEEDED" if r.returncode==0 else "failed"
     elif s in ("http","https","web"):
         scheme="https" if port in ("443","8443") else "http"
