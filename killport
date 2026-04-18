@@ -2,7 +2,7 @@
 
 set -euo pipefail
 
-VERSION="1.8.3"
+VERSION="1.9.0"
 REPO="skosari/killport-mac"
 RAW="https://raw.githubusercontent.com/${REPO}/main"
 API="https://api.github.com/repos/${REPO}/contents"
@@ -1363,6 +1363,176 @@ attack_dispatch() {
   esac
 }
 
+# ── Stress test ─────────────────────────────────────────
+
+stress_run() {
+  local target="$1"
+  local C=$'\033[0;36m' G=$'\033[0;32m' Y=$'\033[0;33m'
+  local RE=$'\033[0;31m' D=$'\033[2m' B=$'\033[1m' R=$'\033[0m'
+
+  local ip port
+  if [[ "$target" == *:* ]]; then
+    ip="${target%:*}"; port="${target##*:}"
+  else
+    printf "\n  ${Y}Usage: killport stress <ip:port>${R}\n\n"; return 1
+  fi
+  if ! [[ "$port" =~ ^[0-9]+$ ]]; then
+    printf "\n  ${Y}Invalid port: %s${R}\n\n" "$port"; return 1
+  fi
+
+  local svc="tcp"
+  case "$port" in
+    80|8080|8000|3000|3001) svc="http"  ;;
+    443|8443)               svc="https" ;;
+    6379)                   svc="redis" ;;
+  esac
+
+  printf "\n${B}${C}  killport stress${R}  ${D}authorized connection flood testing${R}\n"
+  printf "${C}  ────────────────────────────────────────────${R}\n\n"
+  printf "  ${B}Target:${R}   %s  ${D}(service: %s)${R}\n\n" "$target" "$svc"
+
+  printf "  Duration in seconds ${D}[default 30]:${R}\n  → "
+  local _dur="" _secs=10
+  while [ "$_secs" -gt 0 ]; do
+    printf "\r  ${D}Duration in seconds — auto-starting in %2ds [default 30]:${R}  " "$_secs"
+    if IFS= read -r -t 1 _dur; then break; fi
+    (( _secs-- )) || true
+  done
+  printf "\r  %-70s\r\n" " "
+  _dur="${_dur%$'\r'}"
+  local DURATION="${_dur:-30}"
+  if ! [[ "$DURATION" =~ ^[0-9]+$ ]] || [ "$DURATION" -lt 1 ]; then DURATION=30; fi
+  local THREADS=20
+
+  printf "  ${Y}⚠  This will flood %s:%s for %ss at up to %s concurrent connections.${R}\n" \
+    "$ip" "$port" "$DURATION" "$THREADS"
+  printf "  ${D}Only test systems you own or have written authorization to test.${R}\n\n"
+  printf "  Type ${B}yes${R} to confirm:\n  → "
+  local _confirm=""; read -r _confirm; _confirm="${_confirm%$'\r'}"
+  if [[ "$_confirm" != "yes" ]]; then
+    printf "\n  ${D}Aborted.${R}\n\n"; return 0
+  fi
+
+  printf "\n${C}  ────────────────────────────────────────────${R}\n"
+  printf "  ${D}%ss · %s threads · %s${R}\n\n" "$DURATION" "$THREADS" "$svc"
+
+  attack_load_conf
+  local py_stress="/tmp/kp_stress_$$_$RANDOM.py"
+  local _saved_stty; _saved_stty=$(stty -g 2>/dev/null) || _saved_stty=""
+  trap 'rm -f "${py_stress:-}" 2>/dev/null; stty sane 2>/dev/null || true' EXIT INT TERM
+
+  cat > "$py_stress" << 'STRESSEOF'
+import sys,socket,threading,time,datetime
+try: import ssl as _ssl; _HAS_SSL=True
+except: _HAS_SSL=False
+
+TARGET=sys.argv[1]; PORT=int(sys.argv[2]); SVC=sys.argv[3]
+SECS=int(sys.argv[4]); THREADS=int(sys.argv[5]); LOG=sys.argv[6]
+
+sent=0; errs=0; peak=0; lock=threading.Lock(); stop=threading.Event()
+B="\033[1m"; C="\033[0;36m"; D="\033[2m"; G="\033[0;32m"; RE="\033[0;31m"; R="\033[0m"
+
+def worker():
+    global sent,errs
+    while not stop.is_set():
+        try:
+            s=socket.socket(socket.AF_INET,socket.SOCK_STREAM)
+            s.settimeout(3)
+            if SVC=="https" and _HAS_SSL:
+                ctx=_ssl.create_default_context()
+                ctx.check_hostname=False; ctx.verify_mode=_ssl.CERT_NONE
+                s=ctx.wrap_socket(s,server_hostname=TARGET)
+            s.connect((TARGET,PORT))
+            if SVC in ("http","https"):
+                s.sendall((f"GET / HTTP/1.1\r\nHost: {TARGET}\r\n"
+                           "User-Agent: killport-stress/1.0\r\nConnection: close\r\n\r\n").encode())
+                s.recv(512)
+            elif SVC=="redis":
+                s.sendall(b"PING\r\n"); s.recv(32)
+            s.close()
+            with lock: sent+=1
+        except:
+            with lock: errs+=1
+
+def stat_loop():
+    global peak
+    SP=["⠋","⠙","⠹","⠸","⠼","⠴","⠦","⠧","⠇","⠏"]
+    start=time.time(); prev=0; tick=0
+    while not stop.is_set():
+        elapsed=time.time()-start; rem=max(0,SECS-elapsed)
+        with lock: s=sent; e=errs
+        ps=s-prev; prev=s
+        with lock:
+            if ps>peak: peak=ps
+        avg=s/max(elapsed,0.1)
+        pct=min(100,int(elapsed/SECS*100)); bw=24
+        bar="\u2588"*int(pct*bw/100)+"\u2591"*(bw-int(pct*bw/100))
+        sys.stdout.write(
+            f"\r  {D}{SP[tick%len(SP)]}  [{bar}]{R}  "
+            f"{B}{s:,}{R} req  {avg:.0f}/s  {e} err  {D}{rem:.0f}s left{R}   ")
+        sys.stdout.flush(); tick+=1; time.sleep(1)
+
+ts=[threading.Thread(target=worker,daemon=True) for _ in range(THREADS)]
+for t in ts: t.start()
+threading.Thread(target=stat_loop,daemon=True).start()
+time.sleep(SECS); stop.set(); time.sleep(0.5)
+sys.stdout.write("\r"+" "*80+"\r"); sys.stdout.flush()
+
+with lock: total=sent; total_err=errs; pk=peak
+avg=total/max(SECS,1); ep=total_err*100//(total+total_err) if (total+total_err) else 0
+
+still_up=False
+try:
+    cs=socket.socket(socket.AF_INET,socket.SOCK_STREAM)
+    cs.settimeout(3); cs.connect((TARGET,PORT)); cs.close(); still_up=True
+except: pass
+
+sc=G if still_up else RE
+st_txt="ONLINE — still responding" if still_up else "NOT RESPONDING — may be down"
+now=datetime.datetime.now().strftime("%Y-%m-%d %H:%M")
+sep="═"*54
+report=(f"{sep}\n  STRESS TEST  ·  {TARGET}:{PORT}  ·  {now}\n{sep}\n"
+        f"  Service:   {SVC}\n  Duration:  {SECS}s  ·  Threads: {THREADS}\n"
+        f"  Requests:  {total:,}  ({avg:.0f}/s avg,  {pk}/s peak)\n"
+        f"  Errors:    {total_err:,}  ({ep}%)\n"
+        f"  After:     {st_txt}\n{sep}\n")
+
+print(f"  {sep}"); print(f"  STRESS TEST COMPLETE"); print(f"  {sep}")
+print(f"  Service:   {SVC}  ({TARGET}:{PORT})")
+print(f"  Duration:  {SECS}s  ·  Threads: {THREADS}")
+print(f"  Requests:  {B}{total:,}{R}  ({avg:.0f}/s avg  ·  {pk}/s peak)")
+print(f"  Errors:    {total_err:,}  ({ep}%)")
+print(f"  After:     {sc}{st_txt}{R}")
+print(f"  {sep}")
+with open(LOG,"a",encoding="utf-8") as f: f.write(report)
+STRESSEOF
+
+  python3 "$py_stress" "$ip" "$port" "$svc" "$DURATION" "$THREADS" "$ATTACK_LOG" || true
+  trap - EXIT INT TERM
+  [ -n "$_saved_stty" ] && stty "$_saved_stty" 2>/dev/null || stty sane 2>/dev/null || true
+  rm -f "$py_stress" 2>/dev/null
+
+  printf "\n${C}  ────────────────────────────────────────────${R}\n"
+  printf "  ${D}Logged to: %s${R}\n\n" "$ATTACK_LOG"
+}
+
+stress_dispatch() {
+  local sub="${1:-}"
+  local C=$'\033[0;36m' D=$'\033[2m' B=$'\033[1m' R=$'\033[0m'
+  if [ -z "$sub" ]; then
+    printf "\n${B}${C}  killport stress${R}  ${D}authorized connection flood testing${R}\n"
+    printf "${C}  ────────────────────────────────────────────${R}\n\n"
+    printf "  killport stress <ip:port>     flood test a single service\n\n"
+    printf "  ${D}Examples:${R}\n"
+    printf "    killport stress 192.168.1.10:80     HTTP flood\n"
+    printf "    killport stress 192.168.1.10:22     TCP connection flood\n"
+    printf "    killport stress 192.168.1.10:6379   Redis PING flood\n\n"
+    printf "  ${D}Requires authorization. Only test systems you own or have permission to test.${R}\n\n"
+    return 0
+  fi
+  stress_run "$sub"
+}
+
 # -------------------------------------------------------
 
 if [ $# -eq 0 ]; then
@@ -1390,6 +1560,7 @@ if [ $# -eq 0 ]; then
   echo "  killport attack <ip>:port  AI pentest: scan single port + analysis"
   echo "  killport attack config     configure Ollama host and model"
   echo "  killport attack log        view attack history"
+  echo "  killport stress <ip:port>  authorized connection flood / stress test"
   echo "  killport update            update to the latest version"
   echo "  killport uninstall         remove killport and all firewall rules"
   echo ""
@@ -1400,6 +1571,10 @@ case "$1" in
 
   attack)
     attack_dispatch "${2:-}"
+    ;;
+
+  stress)
+    stress_dispatch "${2:-}"
     ;;
 
   uninstall)
