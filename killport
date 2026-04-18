@@ -2,7 +2,7 @@
 
 set -euo pipefail
 
-VERSION="1.10.1"
+VERSION="1.10.2"
 REPO="skosari/killport-mac"
 RAW="https://raw.githubusercontent.com/${REPO}/main"
 API="https://api.github.com/repos/${REPO}/contents"
@@ -91,6 +91,7 @@ status_port() {
 }
 
 open_ports() {
+  [ -n "${1:-}" ] && { opencheck_ports "$1"; return; }
   local C=$'\033[0;36m'
   local G=$'\033[0;32m'
   local Y=$'\033[0;33m'
@@ -220,9 +221,9 @@ ports_inspect() {
   printf "\n  ${D}This is only what the local machine reports. To truly verify${R}\n"
   printf "  ${D}external reachability, run from another machine:${R}\n"
   if [ -n "$lan_ip" ]; then
-    printf "  ${B}killport opencheck %s${R}\n\n" "$lan_ip"
+    printf "  ${B}killport openports %s${R}\n\n" "$lan_ip"
   else
-    printf "  ${B}killport opencheck <this-machine-ip>${R}\n\n"
+    printf "  ${B}killport openports <this-machine-ip>${R}\n\n"
   fi
 }
 
@@ -1974,7 +1975,7 @@ if [ $# -eq 0 ]; then
   echo "  killport openports         show all ports open to external access"
   echo "  killport closedports       show all listening ports with no external access"
   echo "  killport ports             inspect all ports with firewall status"
-  echo "  killport opencheck <ip>    probe an IP from this machine to check open ports"
+  echo "  killport openports <ip>    probe an IP from this machine to check open ports"
   echo "  killport status <port>     show if a port is open or closed"
   echo "  killport ip                show IP addresses, DNS, and network info"
   echo "  killport scan <ip>         scan ports on a remote host (no AI)"
@@ -2080,7 +2081,7 @@ case "$1" in
     ;;
 
   openports)
-    open_ports
+    open_ports "${2:-}"
     ;;
 
   closedports)
@@ -2092,8 +2093,8 @@ case "$1" in
     ;;
 
   opencheck)
-    [ -z "${2:-}" ] && { echo "Usage: killport opencheck <ip>"; exit 1; }
-    opencheck_ports "$2"
+    [ -z "${2:-}" ] && { echo "Usage: killport openports <ip>"; exit 1; }
+    open_ports "$2"
     ;;
 
   status)
