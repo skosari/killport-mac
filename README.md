@@ -11,6 +11,10 @@
 
 **Kill whatever is running on a port — macOS**
 
+Also available for [Linux](https://github.com/skosari/killport-linux) and [Windows](https://github.com/skosari/killport-win)
+
+AI-powered pentesting, vulnerability scanning, and automated hardening via [Ollama](https://ollama.com) — runs entirely on your hardware
+
 [![Version](https://img.shields.io/badge/version-1.10.3-00b4d8?style=flat-square)](#)
 [![Platform](https://img.shields.io/badge/platform-macOS-00b4d8?style=flat-square&logo=apple&logoColor=white)](#)
 [![Shell](https://img.shields.io/badge/shell-bash-00b4d8?style=flat-square&logo=gnubash&logoColor=white)](#)
