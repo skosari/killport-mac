@@ -78,7 +78,7 @@ curl -fsSL https://raw.githubusercontent.com/skosari/killport-mac/main/killport 
 | `killport attack <ip>` | AI pentest: scan 47 common ports + analysis |
 | `killport attack allports <ip>` | AI pentest: scan all 65535 ports + analysis |
 | `killport attack <ip>:<port>` | AI pentest: single port deep dive |
-| `killport attack config` | Configure Ollama host and model |
+| `killport config` | Configure Ollama host and model |
 | `killport attack log` | View attack history |
 | `killport update` | Update to the latest version |
 | `killport uninstall` | Remove killport and all firewall rules |
@@ -544,7 +544,7 @@ killport stress 192.168.1.10:22    # TCP connection flood
    ```
 2. Configure killport:
    ```sh
-   killport attack config
+   killport config
    ```
 3. Run:
    ```sh
@@ -557,7 +557,7 @@ killport stress 192.168.1.10:22    # TCP connection flood
 killport attack 192.168.1.10            # scan 47 common ports
 killport attack allports 192.168.1.10   # scan all 65535 ports
 killport attack 192.168.1.10:6379       # single port deep dive
-killport attack config                  # configure Ollama host + model
+killport config                  # configure Ollama host + model
 killport attack log                     # view past attack reports
 ```
 

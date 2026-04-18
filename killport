@@ -694,7 +694,7 @@ attack_run() {
   tags_json=$(curl -sf --max-time 5 "http://${ATTACK_OLLAMA}/api/tags" 2>/dev/null || true)
   if [ -z "$tags_json" ]; then
     printf "  ${RE}Ollama not reachable at http://%s${R}\n" "$ATTACK_OLLAMA"
-    printf "  ${D}Run: ollama serve   or configure: killport attack config${R}\n\n"
+    printf "  ${D}Run: ollama serve   or configure: killport config${R}\n\n"
     return 1
   fi
 
@@ -1358,7 +1358,7 @@ attack_dispatch() {
       printf "  killport attack <ip>              scan 47 common ports + AI analysis\n"
       printf "  killport attack allports <ip>     scan all 65535 ports + AI analysis\n"
       printf "  killport attack <ip>:<port>       scan a single port + AI analysis\n"
-      printf "  killport attack config            configure Ollama host and model\n"
+      printf "  killport config                   configure Ollama host and model\n"
       printf "  killport attack log               view attack history\n\n"
       ;;
     *) attack_run "$1" ;;
@@ -2328,7 +2328,7 @@ if MODEL:
     except Exception as e:
         print(f"  {D}AI unavailable: {e}{R}")
 else:
-    print(f"  {D}No model configured — run: killport attack config{R}")
+    print(f"  {D}No model configured — run: killport config{R}")
 
 print(f"\n{C}  ────────────────────────────────────────────{R}")
 FIXPYEOF
@@ -2416,7 +2416,7 @@ if [ $# -eq 0 ]; then
   echo "  killport forward <p> <h:p> forward a local port to a remote host:port"
   echo "  killport attack <ip>       AI pentest: scan all ports + analysis"
   echo "  killport attack <ip>:port  AI pentest: scan single port + analysis"
-  echo "  killport attack config     configure Ollama host and model"
+  echo "  killport config            configure Ollama host and model"
   echo "  killport attack log        view attack history"
   echo "  killport stress <ip:port>  authorized connection flood / stress test"
   echo "  killport update            update to the latest version"
@@ -2461,6 +2461,10 @@ case "$1" in
 
   forward)
     forward_port "${2:-}" "${3:-}"
+    ;;
+
+  config)
+    attack_config
     ;;
 
   attack)
