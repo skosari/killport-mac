@@ -2,7 +2,7 @@
 
 set -euo pipefail
 
-VERSION="1.10.15"
+VERSION="1.10.16"
 REPO="skosari/killport-mac"
 RAW="https://raw.githubusercontent.com/${REPO}/main"
 API="https://api.github.com/repos/${REPO}/contents"
@@ -2468,6 +2468,14 @@ _net_detect_base() {
   NET_SCAN_BASE=$(printf '%s' "$myip" | cut -d. -f1-3)
 }
 
+_mac_norm() {
+  local raw=$1 a b c d e f
+  IFS=: read -r a b c d e f <<< "$raw"
+  printf '%02x:%02x:%02x:%02x:%02x:%02x' \
+    $(( 16#$a )) $(( 16#$b )) $(( 16#$c )) \
+    $(( 16#$d )) $(( 16#$e )) $(( 16#$f ))
+}
+
 _net_progress_bar() {
   local done=$1 total=$2 found=$3
   [ "$total" -eq 0 ] && return
@@ -2485,8 +2493,10 @@ _net_progress_bar() {
 
 net_scan_hosts() {
   # Scans local /24. Prints progress bar + hosts as found.
-  # Populates NET_SCAN_HOSTS. Accepts optional array of MACs to skip (pre-shown).
-  # Usage: net_scan_hosts [skip_mac1 skip_mac2 ...]
+  # Populates NET_SCAN_HOSTS. Accepts optional list of IPs to skip.
+  # Usage: net_scan_hosts [skip_ip1 skip_ip2 ...]
+  # Note: avoids arp -a (hangs with many incomplete entries on macOS).
+  # Uses ping exit code to detect UP hosts, then arp -n <ip> per host for MAC.
   local G=$'\033[0;32m' D=$'\033[2m' R=$'\033[0m' Y=$'\033[0;33m'
 
   _net_detect_base || {
@@ -2496,39 +2506,48 @@ net_scan_hosts() {
   NET_SCAN_HOSTS=()
   _NET_PIDS=()
 
-  for i in $(seq 1 254); do
-    ping -c1 -W500 "${NET_SCAN_BASE}.${i}" &>/dev/null &
-    _NET_PIDS+=($!)
-  done
-  local _total=${#_NET_PIDS[@]}
+  local _tmpdir
+  _tmpdir=$(mktemp -d)
+  mkdir "$_tmpdir/done" "$_tmpdir/up" "$_tmpdir/proc"
+  local _total=254
 
-  # Pre-populate shown MACs from caller's skip list
+  for i in $(seq 1 254); do
+    ( ping -c1 -W500 "${NET_SCAN_BASE}.${i}" &>/dev/null \
+        && touch "$_tmpdir/up/$i" || true
+      touch "$_tmpdir/done/$i" ) &
+  done
+
   local -a _shown=("$@")
-  local _found=0 _done=0 _p _line _ip _mac _host _skip _sm
+  local _found=0 _done=0 _f _i _ip _mac _arp_line
 
   _net_progress_bar 0 "$_total" 0
 
   while true; do
-    _done=0
-    for _p in "${_NET_PIDS[@]+"${_NET_PIDS[@]}"}"; do
-      kill -0 "$_p" 2>/dev/null || (( _done++ )) || true
-    done
+    _done=$(ls -1 "$_tmpdir/done" 2>/dev/null | wc -l | tr -d ' ')
 
-    while IFS= read -r _line; do
-      _ip=$(printf '%s' "$_line" | grep -oE '\([0-9]+\.[0-9]+\.[0-9]+\.[0-9]+\)' | tr -d '()')
-      _mac=$(printf '%s' "$_line" | grep -oE '[0-9a-f:]{17}' | head -1)
-      [ -z "$_ip" ] || [ -z "$_mac" ] && continue
-      [[ "$_mac" == "ff:ff:ff:ff:ff:ff" ]] && continue
+    # Process each newly found UP host
+    for _f in "$_tmpdir/up/"*; do
+      [ -f "$_f" ] || continue
+      mv "$_f" "$_tmpdir/proc/" 2>/dev/null || continue
+      _i=$(basename "$_f")
+      _ip="${NET_SCAN_BASE}.${_i}"
+
+      # Skip if caller asked us to
       _skip=0
-      for _sm in "${_shown[@]:-}"; do [ "$_sm" = "$_mac" ] && _skip=1; done
+      for _sm in "${_shown[@]+"${_shown[@]}"}"; do [ "$_sm" = "$_ip" ] && _skip=1; done
       [ "$_skip" -eq 1 ] && continue
-      _host=$(printf '%s' "$_line" | awk '{print $1}')
+
+      # Get MAC via single-IP arp (fast, no table scan)
+      _arp_line=$(arp -n "$_ip" 2>/dev/null || true)
+      _mac=$(printf '%s' "$_arp_line" | grep -oE '([0-9a-f]{1,2}:){5}[0-9a-f]{1,2}' | head -1)
+      [ -n "$_mac" ] && _mac=$(_mac_norm "$_mac") || _mac="??"
+
       (( _found++ )) || true
-      _shown+=("$_mac")
-      NET_SCAN_HOSTS+=("${_host} ${_ip} ${_mac}")
-      printf "\r\033[2K  ${G}%-30s${R}  %-15s  ${D}%s${R}\n" "$_host" "$_ip" "$_mac"
+      _shown+=("$_ip")
+      NET_SCAN_HOSTS+=("? ${_ip} ${_mac}")
+      printf "\r\033[2K  ${G}%-30s${R}  %-15s  ${D}%s${R}\n" "?" "$_ip" "$_mac"
       _net_progress_bar "$_done" "$_total" "$_found"
-    done < <(arp -a 2>/dev/null | grep -v incomplete)
+    done
 
     _net_progress_bar "$_done" "$_total" "$_found"
     [ "$_done" -ge "$_total" ] && break
@@ -2536,23 +2555,7 @@ net_scan_hosts() {
   done
 
   wait 2>/dev/null || true
-
-  # Final ARP sweep
-  while IFS= read -r _line; do
-    _ip=$(printf '%s' "$_line" | grep -oE '\([0-9]+\.[0-9]+\.[0-9]+\.[0-9]+\)' | tr -d '()')
-    _mac=$(printf '%s' "$_line" | grep -oE '[0-9a-f:]{17}' | head -1)
-    [ -z "$_ip" ] || [ -z "$_mac" ] && continue
-    [[ "$_mac" == "ff:ff:ff:ff:ff:ff" ]] && continue
-    _skip=0
-    for _sm in "${_shown[@]:-}"; do [ "$_sm" = "$_mac" ] && _skip=1; done
-    [ "$_skip" -eq 1 ] && continue
-    _host=$(printf '%s' "$_line" | awk '{print $1}')
-    (( _found++ )) || true
-    _shown+=("$_mac")
-    NET_SCAN_HOSTS+=("${_host} ${_ip} ${_mac}")
-    printf "\r\033[2K  ${G}%-30s${R}  %-15s  ${D}%s${R}\n" "$_host" "$_ip" "$_mac"
-  done < <(arp -a 2>/dev/null | grep -v incomplete)
-
+  rm -rf "$_tmpdir" 2>/dev/null || true
   printf "\r\033[2K"
 }
 
