@@ -2,7 +2,7 @@
 
 set -euo pipefail
 
-VERSION="1.10.9"
+VERSION="1.10.10"
 REPO="skosari/killport-mac"
 RAW="https://raw.githubusercontent.com/${REPO}/main"
 API="https://api.github.com/repos/${REPO}/contents"
@@ -2443,43 +2443,34 @@ wol_save_host() {
   printf '%s %s %s\n' "$name" "$mac" "$ip" >> "$WOL_HOSTS"
 }
 
-wol_scan_network() {
+wol_start_scan() {
   local iface
   iface=$(route -n get default 2>/dev/null | awk '/interface:/{print $2}' | head -1)
   [ -z "$iface" ] && iface=$(ifconfig -l 2>/dev/null | tr ' ' '\n' | grep -vE '^(lo|utun|awdl|llw|bridge|gif|stf)' | head -1)
-
   local myip
   myip=$(ipconfig getifaddr "$iface" 2>/dev/null || ifconfig "$iface" 2>/dev/null | awk '/inet /{print $2}' | head -1)
-  if [ -z "$myip" ]; then printf "  Could not determine local IP.\n"; SCANNED_HOSTS=(); return; fi
-
-  local base; base=$(printf '%s' "$myip" | cut -d. -f1-3)
-
+  if [ -z "$myip" ]; then WOL_SCAN_BASE=""; return 1; fi
+  WOL_SCAN_BASE=$(printf '%s' "$myip" | cut -d. -f1-3)
   for i in $(seq 1 254); do
-    ping -c1 -W1 -t1 "${base}.${i}" &>/dev/null &
+    ping -c1 -W1 -t1 "${WOL_SCAN_BASE}.${i}" &>/dev/null &
   done
+}
 
-  local spin=('⠋' '⠙' '⠹' '⠸' '⠼' '⠴' '⠦' '⠧' '⠇' '⠏') si=0
-  local G=$'\033[0;32m' D=$'\033[2m' R=$'\033[0m'
-  while jobs -r 2>/dev/null | grep -q .; do
-    local found; found=$(arp -a 2>/dev/null | grep -vc incomplete || true)
-    printf "\r  Scanning %s.1–254  %s  ${D}%d host(s) found${R}" "$base" "${spin[$si]}" "$found"
-    si=$(( (si + 1) % 10 ))
-    sleep 0.1
-  done
-  wait
-  sleep 0.3
-  local final; final=$(arp -a 2>/dev/null | grep -vc incomplete || true)
-  printf "\r  Scanning %s.1–254  ${G}done${R}  ${D}%d host(s) found${R}               \n" "$base" "$final"
-
-  SCANNED_HOSTS=()
+_wol_arp_poll() {
   while IFS= read -r line; do
-    local ip mac
+    local ip mac hostname
     ip=$(printf '%s' "$line" | grep -oE '\([0-9]+\.[0-9]+\.[0-9]+\.[0-9]+\)' | tr -d '()')
     mac=$(printf '%s' "$line" | grep -oE '[0-9a-f:]{17}' | head -1)
     [ -z "$ip" ] || [ -z "$mac" ] && continue
     [[ "$mac" == "ff:ff:ff:ff:ff:ff" ]] && continue
-    local hostname; hostname=$(printf '%s' "$line" | awk '{print $1}')
-    SCANNED_HOSTS+=("${hostname} ${ip} ${mac}")
+    local skip=0
+    for sm in "${_wol_shown[@]:-}"; do [ "$sm" = "$mac" ] && skip=1; done
+    [ "$skip" -eq 1 ] && continue
+    hostname=$(printf '%s' "$line" | awk '{print $1}')
+    (( _wol_count++ )) || true
+    _wol_shown+=("$mac")
+    _wol_entries+=("$mac|$ip|$hostname")
+    printf "\r\033[2K  ${_wol_B}%2d${_wol_R}  %-24s  %s  ${_wol_D}%s${_wol_R}\n" "$_wol_count" "$hostname" "$mac" "$ip"
   done < <(arp -a 2>/dev/null | grep -v incomplete)
 }
 
@@ -2528,57 +2519,74 @@ wol_dispatch() {
       printf "${C}  ────────────────────────────────────────────${R}\n\n"
 
       wol_load_hosts
-      wol_scan_network
-      printf "\n"
 
-      local -a entries=()
-      local -a labels=()
+      # Shared state used by _wol_arp_poll
+      local _wol_B="$B" _wol_R="$R" _wol_D="$D"
+      local -a _wol_entries=() _wol_shown=()
+      local _wol_count=0
 
+      # Print saved hosts immediately (numbered, with ★)
       for entry in "${WOL_SAVED[@]}"; do
-        local n m i
-        n=$(printf '%s' "$entry" | awk '{print $1}')
-        m=$(printf '%s' "$entry" | awk '{print $2}')
-        i=$(printf '%s' "$entry" | awk '{print $3}')
-        entries+=("$m|$i|$n")
-        labels+=("$(printf "${G}★${R} ${B}%-20s${R}  %s  ${D}%s${R}" "$n" "$m" "$i")")
+        local sn sm si
+        sn=$(printf '%s' "$entry" | awk '{print $1}')
+        sm=$(printf '%s' "$entry" | awk '{print $2}')
+        si=$(printf '%s' "$entry" | awk '{print $3}')
+        (( _wol_count++ )) || true
+        _wol_shown+=("$sm")
+        _wol_entries+=("$sm|$si|$sn")
+        printf "  ${B}%2d${R}  ${G}★${R} ${B}%-22s${R}  %s  ${D}%s${R}\n" "$_wol_count" "$sn" "$sm" "$si"
+      done
+      [ "${#WOL_SAVED[@]}" -gt 0 ] && printf "\n"
+
+      # Start background ping sweep
+      WOL_SCAN_BASE=""
+      if ! wol_start_scan; then
+        printf "  ${Y}Could not determine local subnet.${R}\n\n"; return
+      fi
+
+      local spin=('⠋' '⠙' '⠹' '⠸' '⠼' '⠴' '⠦' '⠧' '⠇' '⠏') si=0
+      local _wol_early=""
+
+      printf "  ${D}%s.1–254 — type a number + Enter to wake immediately${R}\n\n" "$WOL_SCAN_BASE"
+
+      while jobs -r 2>/dev/null | grep -q .; do
+        _wol_arp_poll
+        printf "\r  %s  ${D}scanning...${R}   " "${spin[$si]}"
+        si=$(( (si + 1) % 10 ))
+        if IFS= read -r -t 0.08 _wol_early 2>/dev/null; then
+          _wol_early=$(printf '%s' "$_wol_early" | tr -d '[:space:]')
+          if [[ "$_wol_early" =~ ^[0-9]+$ ]] && [ "$_wol_early" -ge 1 ] && [ "$_wol_early" -le "$_wol_count" ]; then
+            kill $(jobs -p) 2>/dev/null || true
+            wait 2>/dev/null || true
+            printf "\r\033[2K"
+            break
+          fi
+          _wol_early=""
+        fi
       done
 
-      for scanned in "${SCANNED_HOSTS[@]}"; do
-        local sh_host sh_ip sh_mac
-        sh_host=$(printf '%s' "$scanned" | awk '{print $1}')
-        sh_ip=$(printf '%s' "$scanned"   | awk '{print $2}')
-        sh_mac=$(printf '%s' "$scanned"  | awk '{print $3}')
-        local already=0
-        for entry in "${WOL_SAVED[@]}"; do
-          local em; em=$(printf '%s' "$entry" | awk '{print $2}')
-          [ "$em" = "$sh_mac" ] && already=1
-        done
-        [ "$already" -eq 1 ] && continue
-        entries+=("$sh_mac|$sh_ip|$sh_host")
-        labels+=("$(printf "  %-20s  %s  ${D}%s${R}" "$sh_host" "$sh_mac" "$sh_ip")")
-      done
+      wait 2>/dev/null || true
+      _wol_arp_poll  # final sweep to catch last-moment replies
+      printf "\r\033[2K"
 
-      if [ "${#entries[@]}" -eq 0 ]; then
+      if [ "${#_wol_entries[@]}" -eq 0 ]; then
         printf "  ${Y}No hosts found. Make sure WoL is enabled in BIOS/settings on target machines.${R}\n\n"
         printf "  ${D}Add a known host:  killport wol save <name> <mac> [ip]${R}\n\n"
         return
       fi
 
-      [ "${#WOL_SAVED[@]}" -gt 0 ] && printf "  ${G}★${R} = saved host\n\n"
-
-      local i=1
-      for lbl in "${labels[@]}"; do
-        printf "  ${B}%2d${R}  %s\n" "$i" "$lbl"
-        (( i++ )) || true
-      done
-
-      printf "\n  ${D}Enter number to wake, or 's <num> <name>' to save a discovered host:${R}\n  → "
-      read -r _sel; _sel="${_sel%$'\r'}"
+      local _sel
+      if [ -n "$_wol_early" ]; then
+        _sel="$_wol_early"
+      else
+        printf "\n  ${D}Enter number to wake, or 's <num> <name>' to save a discovered host:${R}\n  → "
+        read -r _sel; _sel="${_sel%$'\r'}"
+      fi
 
       if [[ "$_sel" =~ ^s[[:space:]]+([0-9]+)[[:space:]]+(.+)$ ]]; then
         local s_idx="${BASH_REMATCH[1]}" s_name="${BASH_REMATCH[2]}"
-        if [ "$s_idx" -ge 1 ] && [ "$s_idx" -le "${#entries[@]}" ]; then
-          local e="${entries[$(( s_idx - 1 ))]}"
+        if [ "$s_idx" -ge 1 ] && [ "$s_idx" -le "${#_wol_entries[@]}" ]; then
+          local e="${_wol_entries[$(( s_idx - 1 ))]}"
           local e_mac="${e%%|*}" e_rest="${e#*|}" e_ip="${e_rest%%|*}"
           wol_save_host "$s_name" "$e_mac" "$e_ip"
           printf "  ${G}Saved as '%s'. Waking now...${R}\n" "$s_name"
@@ -2588,8 +2596,8 @@ wol_dispatch() {
         fi
       fi
 
-      if [[ "$_sel" =~ ^[0-9]+$ ]] && [ "$_sel" -ge 1 ] && [ "$_sel" -le "${#entries[@]}" ]; then
-        local e="${entries[$(( _sel - 1 ))]}"
+      if [[ "$_sel" =~ ^[0-9]+$ ]] && [ "$_sel" -ge 1 ] && [ "$_sel" -le "${#_wol_entries[@]}" ]; then
+        local e="${_wol_entries[$(( _sel - 1 ))]}"
         local e_mac="${e%%|*}" e_rest="${e#*|}" e_ip="${e_rest%%|*}" e_name="${e_rest#*|}"
         printf "\n  Waking ${B}%s${R}  ${D}%s${R}  %s\n" "$e_name" "$e_mac" "$e_ip"
         if wol_send "$e_mac" "$e_ip" 2>/dev/null | grep -q ok; then
