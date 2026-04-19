@@ -2,7 +2,7 @@
 
 set -euo pipefail
 
-VERSION="1.10.19"
+VERSION="1.10.20"
 REPO="skosari/killport-mac"
 RAW="https://raw.githubusercontent.com/${REPO}/main"
 API="https://api.github.com/repos/${REPO}/contents"
@@ -2535,7 +2535,7 @@ net_scan_hosts() {
 
       # ARP entry present = host is up (works even if ICMP blocked, e.g. Windows)
       _arp_line=$(arp -n "$_ip" 2>/dev/null || true)
-      _mac=$(printf '%s' "$_arp_line" | grep -oE '([0-9a-f]{1,2}:){5}[0-9a-f]{1,2}' | head -1)
+      _mac=$(printf '%s' "$_arp_line" | grep -oE '([0-9a-f]{1,2}:){5}[0-9a-f]{1,2}' | head -1 || true)
       [ -z "$_mac" ] && continue
 
       _mac=$(_mac_norm "$_mac")
@@ -2650,7 +2650,7 @@ wol_dispatch() {
           [ "$_skip" -eq 1 ] && continue
 
           _arp_line=$(arp -n "$_ip" 2>/dev/null || true)
-          _mac=$(printf '%s' "$_arp_line" | grep -oE '([0-9a-f]{1,2}:){5}[0-9a-f]{1,2}' | head -1)
+          _mac=$(printf '%s' "$_arp_line" | grep -oE '([0-9a-f]{1,2}:){5}[0-9a-f]{1,2}' | head -1 || true)
           [ -z "$_mac" ] && continue
 
           _mac=$(_mac_norm "$_mac")
