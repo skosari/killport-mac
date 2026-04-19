@@ -15,7 +15,7 @@ Also available for [Linux](https://github.com/skosari/killport-linux) and [Windo
 
 AI-powered pentesting, vulnerability scanning, and automated hardening via [Ollama](https://ollama.com) — runs entirely on your hardware
 
-[![Version](https://img.shields.io/badge/version-1.10.14-00b4d8?style=flat-square)](#)
+[![Version](https://img.shields.io/badge/version-1.10.24-00b4d8?style=flat-square)](#)
 [![Platform](https://img.shields.io/badge/platform-macOS-00b4d8?style=flat-square&logo=apple&logoColor=white)](#)
 [![Shell](https://img.shields.io/badge/shell-bash-00b4d8?style=flat-square&logo=gnubash&logoColor=white)](#)
 [![License](https://img.shields.io/badge/license-Source%20Available-00b4d8?style=flat-square)](LICENSE)
@@ -108,10 +108,15 @@ Killed.
 
 ### `killport list`
 ```
-  ●  *:3000          node        48291
-  ●  *:5432          postgres    312
-  ●  *:8080          nginx       1024
-  ●  127.0.0.1:6379  redis       2048
+  PORT     PID(S)            ADDRESS                   PROCESS
+  ───────  ────────────────  ────────────────────────  ──────────────────────
+  22       1953              *                         sshd
+  80       1024 (+11 more)   *                         nginx
+  3000     48291             *                         node
+  5432     312               *                         postgres
+  6379     2048              127.0.0.1                 redis-server
+
+  5 service(s) listening
 ```
 
 ### `killport openports`
