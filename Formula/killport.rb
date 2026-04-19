@@ -2,8 +2,8 @@ class Killport < Formula
   desc "Kill processes by port, manage firewall, SSH, WoL, and more"
   homepage "https://github.com/skosari/killport-mac"
   url "https://raw.githubusercontent.com/skosari/killport-mac/main/killport"
-  sha256 "3f5e465f7f467183ff6d05306cae5ba78bf175847fa9c44e6c4795c13ad4c064"
-  version "1.10.32"
+  sha256 "e28ec2295cb10f5e9c3bd7547d2830e0d80c7b11d89441aad4b9ce9500063989"
+  version "1.10.33"
   license "MIT"
 
   def install

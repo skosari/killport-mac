@@ -2,7 +2,7 @@
 
 set -euo pipefail
 
-VERSION="1.10.32"
+VERSION="1.10.33"
 REPO="skosari/killport-mac"
 RAW="https://raw.githubusercontent.com/${REPO}/main"
 API="https://api.github.com/repos/${REPO}/contents"
@@ -3302,6 +3302,28 @@ case "$1" in
     ;;
 
   uninstall)
+    # Check for saved data
+    _kp_data_files=()
+    for _f in \
+      "$HOME/.config/killport/wol_hosts" \
+      "$HOME/.config/killport/attack.conf" \
+      "$HOME/.config/killport/attack.log" \
+      "$HOME/.killport/ssh_known" \
+      "$HOME/.killport/shutdown_hosts" \
+      "$HOME/.killport/id_ed25519"; do
+      [ -f "$_f" ] && _kp_data_files+=("$_f")
+    done
+
+    _keep_data=true
+    if [ ${#_kp_data_files[@]} -gt 0 ]; then
+      printf "\n  Saved data found:\n"
+      for _f in "${_kp_data_files[@]}"; do printf "    %s\n" "$_f"; done
+      printf "\n  Keep saved connections, hosts, and logs? [Y/n] "
+      read -r _ans </dev/tty
+      [ "$(printf '%s' "$_ans" | tr '[:upper:]' '[:lower:]')" = "n" ] && _keep_data=false
+      printf "\n"
+    fi
+
     echo "Uninstalling killport..."
     INSTALL_PATH=$(command -v killport)
     if [ -f "$INSTALL_PATH" ]; then
@@ -3318,7 +3340,15 @@ case "$1" in
       sudo pfctl -f /etc/pf.conf 2>/dev/null || true
       echo "  Cleaned pf.conf"
     fi
-    echo "killport uninstalled."
+
+    if [ "$_keep_data" = false ]; then
+      [ -d "$HOME/.config/killport" ] && rm -rf "$HOME/.config/killport" && echo "  Removed $HOME/.config/killport"
+      [ -d "$HOME/.killport" ]        && rm -rf "$HOME/.killport"        && echo "  Removed $HOME/.killport"
+      echo "killport uninstalled. No trace left."
+    else
+      echo "killport uninstalled."
+      echo "  Your data is preserved — reinstalling will pick it up automatically."
+    fi
     ;;
 
   update)
