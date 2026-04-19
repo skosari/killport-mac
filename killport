@@ -2,7 +2,7 @@
 
 set -euo pipefail
 
-VERSION="1.10.11"
+VERSION="1.10.12"
 REPO="skosari/killport-mac"
 RAW="https://raw.githubusercontent.com/${REPO}/main"
 API="https://api.github.com/repos/${REPO}/contents"
@@ -2451,9 +2451,19 @@ wol_start_scan() {
   myip=$(ipconfig getifaddr "$iface" 2>/dev/null || ifconfig "$iface" 2>/dev/null | awk '/inet /{print $2}' | head -1)
   if [ -z "$myip" ]; then WOL_SCAN_BASE=""; return 1; fi
   WOL_SCAN_BASE=$(printf '%s' "$myip" | cut -d. -f1-3)
+  WOL_PIDS=()
   for i in $(seq 1 254); do
     ping -c1 -W1 -t1 "${WOL_SCAN_BASE}.${i}" &>/dev/null &
+    WOL_PIDS+=($!)
   done
+}
+
+_wol_any_running() {
+  local p
+  for p in "${WOL_PIDS[@]+"${WOL_PIDS[@]}"}"; do
+    kill -0 "$p" 2>/dev/null && return 0
+  done
+  return 1
 }
 
 _wol_arp_poll() {
@@ -2549,14 +2559,14 @@ wol_dispatch() {
 
       printf "  ${D}%s.1–254 — type a number + Enter to wake immediately${R}\n\n" "$WOL_SCAN_BASE"
 
-      while jobs -r 2>/dev/null | grep -q .; do
+      while _wol_any_running; do
         _wol_arp_poll
         printf "\r  %s  ${D}scanning...${R}   " "${spin[$si]}"
         si=$(( (si + 1) % 10 ))
         if IFS= read -r -t 0.08 _wol_early 2>/dev/null; then
           _wol_early=$(printf '%s' "$_wol_early" | tr -d '[:space:]')
           if [[ "$_wol_early" =~ ^[0-9]+$ ]] && [ "$_wol_early" -ge 1 ] && [ "$_wol_early" -le "$_wol_count" ]; then
-            kill $(jobs -p) 2>/dev/null || true
+            kill "${WOL_PIDS[@]+"${WOL_PIDS[@]}"}" 2>/dev/null || true
             wait 2>/dev/null || true
             printf "\r\033[2K"
             break
