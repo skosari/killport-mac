@@ -2,7 +2,7 @@
 
 set -euo pipefail
 
-VERSION="1.10.31"
+VERSION="1.10.32"
 REPO="skosari/killport-mac"
 RAW="https://raw.githubusercontent.com/${REPO}/main"
 API="https://api.github.com/repos/${REPO}/contents"
@@ -2995,30 +2995,55 @@ shutdown_dispatch() {
     printf '%s|%s|%s|%s|%s\n' "$name" "$os" "$ip" "$user" "$today" >> "$SD_KNOWN"
   }
 
+  _sd_ensure_key() {
+    if [ ! -f "$KEY_FILE" ]; then
+      printf "  ${D}No SSH key found — generating one...${R}\n"
+      mkdir -p "$KP_DIR"
+      ssh-keygen -t ed25519 -f "$KEY_FILE" -N "" -C "killport@$(hostname -s 2>/dev/null || echo local)" &>/dev/null
+      printf "  ${G}✓ SSH key created: %s${R}\n\n" "$KEY_FILE"
+    fi
+  }
+
+  _sd_show_token() {
+    local ip="$1" user="$2"
+    local pub_file="${KEY_FILE}.pub"
+    local our_user our_ip our_pubkey our_json our_token
+    our_user=$(whoami)
+    our_ip=$(_ssh_our_ip 2>/dev/null || ipconfig getifaddr en0 2>/dev/null || echo "unknown")
+    our_pubkey=$(cat "$pub_file")
+    our_json=$(python3 -c "import json,sys; print(json.dumps({'user':sys.argv[1],'ip':sys.argv[2],'pubkey':sys.argv[3]}))" \
+               "$our_user" "$our_ip" "$our_pubkey" 2>/dev/null)
+    our_token=$(printf '%s' "$our_json" | base64 | tr -d '\n')
+    printf "  ${Y}SSH key not yet authorized on that machine.${R}\n\n"
+    printf "  Run this on ${C}%s${R} (as %s) to authorize this machine:\n\n" "$ip" "$user"
+    printf "  ${C}killport ssh ks:%s${R}\n\n" "$our_token"
+    printf "  ${D}Press Enter when done...${R}" ; read -r ; printf "\n"
+  }
+
   _sd_do_shutdown() {
     local os="$1" ip="$2" user="$3"
+    _sd_ensure_key
+    local cmd
     case "$os" in
-      mac|linux)
-        if [ ! -f "$KEY_FILE" ]; then
-          printf "  ${RE}No killport SSH key found. Run 'killport ssh' first to set one up.${R}\n\n"
-          return 1
-        fi
-        printf "  ${D}Sending shutdown to %s@%s...${R}\n" "$user" "$ip"
-        ssh -i "$KEY_FILE" -o ConnectTimeout=5 -o StrictHostKeyChecking=accept-new \
-          "${user}@${ip}" "sudo shutdown -h now" 2>&1 | sed 's/^/  /'
-        ;;
-      windows)
-        printf "  ${D}Sending shutdown to %s...${R}\n" "$ip"
-        if command -v net &>/dev/null; then
-          ssh -i "$KEY_FILE" -o ConnectTimeout=5 -o StrictHostKeyChecking=accept-new \
-            "${user}@${ip}" "shutdown /s /t 0 /f" 2>&1 | sed 's/^/  /' || \
-          printf "  ${Y}SSH attempt failed. Ensure OpenSSH is running on the Windows machine.${R}\n"
-        else
-          printf "  ${RE}Cannot reach Windows machine without SSH configured.${R}\n"
-          return 1
-        fi
-        ;;
+      mac|linux) cmd="sudo shutdown -h now" ;;
+      windows)   cmd="shutdown /s /t 0 /f" ;;
     esac
+    printf "  ${D}Sending shutdown to %s@%s (%s)...${R}\n\n" "$user" "$ip" "$os"
+    local err_file; err_file=$(mktemp)
+    if ! ssh -i "$KEY_FILE" -o ConnectTimeout=5 -o StrictHostKeyChecking=accept-new \
+         -o BatchMode=yes "${user}@${ip}" "$cmd" 2>"$err_file"; then
+      local err; err=$(cat "$err_file")
+      if printf '%s' "$err" | grep -qi "permission denied\|publickey\|authentication failed"; then
+        _sd_show_token "$ip" "$user"
+        printf "  ${D}Retrying...${R}\n\n"
+        ssh -i "$KEY_FILE" -o ConnectTimeout=5 -o StrictHostKeyChecking=accept-new \
+          "${user}@${ip}" "$cmd" 2>&1 | sed 's/^/  /' || \
+          printf "  ${RE}Still failed — make sure killport ssh ks:<token> was accepted on the remote.${R}\n"
+      else
+        printf '%s\n' "$err" | sed 's/^/  /'
+      fi
+    fi
+    rm -f "$err_file"
   }
 
   # ── list ──────────────────────────────────────────────────────────────────
