@@ -2,7 +2,7 @@
 
 set -euo pipefail
 
-VERSION="1.10.14"
+VERSION="1.10.15"
 REPO="skosari/killport-mac"
 RAW="https://raw.githubusercontent.com/${REPO}/main"
 API="https://api.github.com/repos/${REPO}/contents"
@@ -2470,12 +2470,17 @@ _net_detect_base() {
 
 _net_progress_bar() {
   local done=$1 total=$2 found=$3
+  [ "$total" -eq 0 ] && return
   local C=$'\033[0;36m' D=$'\033[2m' R=$'\033[0m'
-  local w=30 filled=$(( done * 30 / total )) i bar=""
-  for (( i=0; i<filled; i++ )); do bar+="█"; done
-  for (( i=filled; i<w; i++ )); do bar+="░"; done
+  local pct=$(( done * 100 / total ))
+  local filled=$(( done * 30 / total ))
+  local empty=$(( 30 - filled ))
+  local bar="" i=0
+  while [ "$i" -lt "$filled" ]; do bar+="█"; i=$(( i + 1 )); done
+  i=0
+  while [ "$i" -lt "$empty" ]; do bar+="░"; i=$(( i + 1 )); done
   printf "\r  ${C}[%s]${R}  ${D}%3d%%  %d host(s) found${R}   " \
-    "$bar" "$(( done * 100 / total ))" "$found"
+    "$bar" "$pct" "$found"
 }
 
 net_scan_hosts() {
