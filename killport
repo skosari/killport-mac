@@ -2,7 +2,7 @@
 
 set -euo pipefail
 
-VERSION="1.10.24"
+VERSION="1.10.25"
 REPO="skosari/killport-mac"
 RAW="https://raw.githubusercontent.com/${REPO}/main"
 API="https://api.github.com/repos/${REPO}/contents"
@@ -2804,6 +2804,110 @@ wol_dispatch() {
   esac
 }
 
+ssh_dispatch() {
+  local C=$'\033[0;36m' G=$'\033[0;32m' Y=$'\033[0;33m' RE=$'\033[0;31m'
+  local D=$'\033[2m' B=$'\033[1m' R=$'\033[0m'
+  local token="${1:-}"
+
+  local KP_DIR="$HOME/.killport"
+  local KEY_FILE="$KP_DIR/id_ed25519"
+  local PUB_FILE="$KP_DIR/id_ed25519.pub"
+
+  # ── accept mode ──────────────────────────────────────────────────────────
+  if [[ "$token" == ks:* ]]; then
+    local raw="${token#ks:}"
+    local json
+    json=$(printf '%s' "$raw" | base64 -D 2>/dev/null) || {
+      printf "\n  ${RE}Invalid token (base64 decode failed).${R}\n\n"; exit 1
+    }
+
+    local remote_user remote_ip remote_pubkey
+    remote_user=$(printf '%s' "$json" | python3 -c "import json,sys; d=json.load(sys.stdin); print(d['user'])" 2>/dev/null)
+    remote_ip=$(printf '%s' "$json"   | python3 -c "import json,sys; d=json.load(sys.stdin); print(d['ip'])"   2>/dev/null)
+    remote_pubkey=$(printf '%s' "$json" | python3 -c "import json,sys; d=json.load(sys.stdin); print(d['pubkey'])" 2>/dev/null)
+
+    if [ -z "$remote_pubkey" ]; then
+      printf "\n  ${RE}Invalid token (could not parse — was it copied in full?).${R}\n\n"; exit 1
+    fi
+
+    mkdir -p "$HOME/.ssh"
+    chmod 700 "$HOME/.ssh"
+    touch "$HOME/.ssh/authorized_keys"
+    chmod 600 "$HOME/.ssh/authorized_keys"
+
+    if grep -qF "$remote_pubkey" "$HOME/.ssh/authorized_keys" 2>/dev/null; then
+      printf "\n  ${Y}Key already present in ~/.ssh/authorized_keys — no change.${R}\n"
+    else
+      printf '\n%s\n' "$remote_pubkey" >> "$HOME/.ssh/authorized_keys"
+      printf "\n  ${G}✓ Key added to ~/.ssh/authorized_keys${R}\n"
+    fi
+
+    printf "  ${D}From: %s@%s${R}\n\n" "$remote_user" "$remote_ip"
+
+    local our_ip our_user
+    our_user=$(whoami)
+    our_ip=$(ipconfig getifaddr en0 2>/dev/null \
+          || ipconfig getifaddr en1 2>/dev/null \
+          || ipconfig getifaddr en2 2>/dev/null \
+          || echo "<this-mac-ip>")
+
+    # Advisory: check Remote Login without sudo (just inspect launchd)
+    if ! launchctl list com.openssh.sshd &>/dev/null; then
+      printf "  ${Y}⚠  Remote Login may be off on this Mac.${R}\n"
+      printf "  ${D}Enable: System Settings → General → Sharing → Remote Login${R}\n\n"
+    fi
+
+    printf "  ${B}They can now connect with:${R}\n"
+    printf "  ${C}ssh -i ~/.killport/id_ed25519 %s@%s${R}\n\n" "$our_user" "$our_ip"
+    return
+  fi
+
+  # ── error if non-empty non-token arg ─────────────────────────────────────
+  if [ -n "$token" ]; then
+    printf "\n  ${RE}Unrecognised argument.${R}\n"
+    printf "  Usage:\n"
+    printf "    killport ssh              generate your token\n"
+    printf "    killport ssh ks:<token>   accept a token from another machine\n\n"
+    exit 1
+  fi
+
+  # ── generate mode ────────────────────────────────────────────────────────
+  printf "\n${B}${C}  killport ssh — Key Exchange${R}\n"
+  printf "${C}  ────────────────────────────────────────────${R}\n\n"
+
+  mkdir -p "$KP_DIR"
+  chmod 700 "$KP_DIR"
+
+  if [ ! -f "$KEY_FILE" ]; then
+    printf "  Generating Ed25519 keypair...\n"
+    ssh-keygen -t ed25519 -f "$KEY_FILE" -N "" -C "killport@$(hostname -s)" -q
+    printf "  ${G}✓ Created %s${R}\n\n" "$KEY_FILE"
+  else
+    printf "  ${D}Using existing key: %s${R}\n\n" "$PUB_FILE"
+  fi
+
+  local pubkey local_ip local_user json token_b64
+  pubkey=$(cat "$PUB_FILE")
+  local_user=$(whoami)
+  local_ip=$(ipconfig getifaddr en0 2>/dev/null \
+          || ipconfig getifaddr en1 2>/dev/null \
+          || ipconfig getifaddr en2 2>/dev/null \
+          || echo "unknown")
+
+  json=$(python3 -c "
+import json, sys
+print(json.dumps({'user': sys.argv[1], 'ip': sys.argv[2], 'pubkey': sys.argv[3]}))
+" "$local_user" "$local_ip" "$pubkey")
+
+  token_b64=$(printf '%s' "$json" | base64 | tr -d '\n')
+
+  printf "  ${B}Run this on the other Mac:${R}\n\n"
+  printf "  ${C}killport ssh ks:%s${R}\n\n" "$token_b64"
+  printf "  ${D}Then connect from this Mac with:${R}\n"
+  printf "  ${C}ssh -i ~/.killport/id_ed25519 <their-user>@<their-ip>${R}\n\n"
+  printf "  ${D}Your IP on this machine: %s${R}\n\n" "$local_ip"
+}
+
 # -------------------------------------------------------
 
 if [ $# -eq 0 ]; then
@@ -2832,6 +2936,8 @@ if [ $# -eq 0 ]; then
   echo "  killport close <port>      close a port from external connections"
   echo "  killport closedports       show all listening ports with no external access"
   echo "  killport ip                show IP addresses, DNS, and network info"
+  echo "  killport ssh               generate SSH token so another Mac can connect"
+  echo "  killport ssh ks:<token>    accept a token — let the other Mac SSH in"
   echo "  killport scan              scan local network for all active computers"
   echo "  killport scan <ip>         scan ports on a remote host (no AI)"
   echo "  killport scan <ip> all     scan all 65535 ports on a remote host"
@@ -2908,6 +3014,10 @@ case "$1" in
 
   stress)
     stress_dispatch "${2:-}"
+    ;;
+
+  ssh)
+    ssh_dispatch "${2:-}"
     ;;
 
   wol)
