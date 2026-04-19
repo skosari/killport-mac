@@ -2,7 +2,7 @@
 
 set -euo pipefail
 
-VERSION="1.10.27"
+VERSION="1.10.28"
 REPO="skosari/killport-mac"
 RAW="https://raw.githubusercontent.com/${REPO}/main"
 API="https://api.github.com/repos/${REPO}/contents"
@@ -2897,11 +2897,25 @@ ssh_dispatch() {
     local tmp=""; [ -f "$SSH_KNOWN" ] && tmp=$(grep -v "^${save_name}|" "$SSH_KNOWN" 2>/dev/null || true)
     printf '%s\n' "$tmp" > "$SSH_KNOWN"
     printf '%s|%s|%s|%s\n' "$save_name" "$remote_user" "$remote_ip" "$today" >> "$SSH_KNOWN"
+    # ── output return token so they can SSH back to us ──────────────────
+    if [ -f "$PUB_FILE" ]; then
+      local our_pubkey our_json our_token
+      our_pubkey=$(cat "$PUB_FILE")
+      our_json=$(python3 -c "
+import json, sys
+print(json.dumps({'user': sys.argv[1], 'ip': sys.argv[2], 'pubkey': sys.argv[3]}))
+" "$our_user" "$our_ip" "$our_pubkey")
+      our_token=$(printf '%s' "$our_json" | base64 | tr -d '\n')
+      printf "  ${D}──────────────────────────────────────────────────${R}\n"
+      printf "  ${D}To SSH back to this Mac, run on their machine:${R}\n\n"
+      printf "  ${C}killport ssh ks:%s${R}\n\n" "$our_token"
+    fi
+
     printf "  ${G}✓ Saved as '%s'  —  killport ssh %s${R}\n\n" "$save_name" "$save_name"
     return
   fi
 
-  # ── name lookup ──────────────────────────────────────────────────────────
+  # ── name lookup → connect ────────────────────────────────────────────────
   if [ -n "$subcmd" ]; then
     if [ -f "$SSH_KNOWN" ]; then
       local found_user="" found_ip="" found_date=""
@@ -2912,15 +2926,8 @@ ssh_dispatch() {
         fi
       done < "$SSH_KNOWN"
       if [ -n "$found_user" ]; then
-        local our_ip our_user
-        our_user=$(whoami)
-        our_ip=$(_ssh_our_ip)
-        printf "\n${B}${C}  SSH Easy Connect — %s${R}\n" "$subcmd"
-        printf "${C}  ────────────────────────────────────────────${R}\n\n"
-        printf "  ${D}%s (%s) — key accepted %s${R}\n\n" "$found_user" "$found_ip" "$found_date"
-        printf "  ${B}They connect to this Mac with:${R}\n"
-        printf "  ${C}ssh -i ~/.killport/id_ed25519 %s@%s${R}\n\n" "$our_user" "$our_ip"
-        return
+        printf "\n  ${D}Connecting to %s (%s@%s)...${R}\n\n" "$subcmd" "$found_user" "$found_ip"
+        exec ssh -i "$KEY_FILE" "${found_user}@${found_ip}"
       fi
     fi
     printf "\n  ${RE}No saved connection named '%s'.${R}\n" "$subcmd"
