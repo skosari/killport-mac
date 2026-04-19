@@ -2,7 +2,7 @@
 
 set -euo pipefail
 
-VERSION="1.10.25"
+VERSION="1.10.26"
 REPO="skosari/killport-mac"
 RAW="https://raw.githubusercontent.com/${REPO}/main"
 API="https://api.github.com/repos/${REPO}/contents"
@@ -2950,6 +2950,10 @@ if [ $# -eq 0 ]; then
   echo "  killport dns <domain>      DNS recon: A/MX/TXT/NS/AXFR zone transfer test"
   echo "  killport forward <p> <h:p> forward a local port to a remote host:port"
   echo "  killport stress <ip:port>  authorized connection flood / stress test"
+  echo ""
+  echo "  *** SSH EASY CONNECT ***"
+  echo "  killport ssh               generate a token so another Mac can SSH in"
+  echo "  killport ssh ks:<token>    accept a token — adds their key, enables SSH"
   echo ""
   echo "  *** WAKE ON LAN ***"
   echo "  killport wol               scan network and wake or save host"
