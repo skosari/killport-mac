@@ -82,6 +82,10 @@ curl -fsSL https://raw.githubusercontent.com/skosari/killport-mac/main/killport 
 | `killport ssh ks:<token>` | Accept a token — adds their key and enables SSH access |
 | `killport ssh list` | Show all saved SSH connections |
 | `killport ssh <name>` | SSH to a saved connection using your key |
+| `killport shutdown` | Scan network and pick a machine to shut down |
+| `killport shutdown <ip>` | Send a shutdown signal to a remote machine via SSH |
+| `killport shutdown <name>` | Shut down a saved host by name |
+| `killport shutdown list` | Show all saved shutdown hosts |
 | `killport wol` | Wake a LAN computer — scan network or pick a saved host |
 | `killport wol <name>` | Wake a saved host by name |
 | `killport wol save <name> <mac> [ip]` | Save a host for quick wake |
@@ -646,6 +650,23 @@ killport ssh sams-mbp      # print the exact ssh command for that person
   They connect to this Mac with:
   ssh -i ~/.killport/id_ed25519 youruser@192.168.1.55
 ```
+
+### Shutdown → `killport shutdown`
+
+Send a shutdown signal to any Mac, Linux, or Windows machine on your network over SSH. On first use you'll be asked for the OS and SSH username — save the host by name so you never have to type the IP again.
+
+```sh
+killport shutdown                  # scan your /24 subnet and pick a machine
+killport shutdown 192.168.1.50     # shutdown by IP (prompts OS + user, offers to save)
+killport shutdown mini             # shutdown a saved host by name
+killport shutdown list             # show all saved shutdown hosts
+```
+
+With no argument, `killport shutdown` ping-sweeps your local subnet, shows every live host, and lets you pick by number. It then asks for the OS type (mac / linux / windows) and SSH username, sends the shutdown, and offers to save the host for next time.
+
+Supports macOS (`sudo shutdown -h now`), Linux (`sudo shutdown -h now`), and Windows (`shutdown /s /t 0 /f`). Uses the killport SSH key (`~/.killport/id_ed25519`) — set that up first with `killport ssh`.
+
+---
 
 ### Wake on LAN → `killport wol`
 

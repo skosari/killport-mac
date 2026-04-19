@@ -2,7 +2,7 @@
 
 set -euo pipefail
 
-VERSION="1.10.28"
+VERSION="1.10.29"
 REPO="skosari/killport-mac"
 RAW="https://raw.githubusercontent.com/${REPO}/main"
 API="https://api.github.com/repos/${REPO}/contents"
@@ -2969,6 +2969,179 @@ print(json.dumps({'user': sys.argv[1], 'ip': sys.argv[2], 'pubkey': sys.argv[3]}
   printf "  ${D}Your IP on this machine: %s${R}\n\n" "$local_ip"
 }
 
+# ── Shutdown ──────────────────────────────────────────────────────────────────
+
+shutdown_dispatch() {
+  local C=$'\033[0;36m' G=$'\033[0;32m' Y=$'\033[0;33m' RE=$'\033[0;31m'
+  local D=$'\033[2m' B=$'\033[1m' R=$'\033[0m'
+  local subcmd="${1:-}"
+
+  local KP_DIR="$HOME/.killport"
+  local KEY_FILE="$KP_DIR/id_ed25519"
+  local SD_KNOWN="$KP_DIR/shutdown_hosts"
+
+  _sd_load() {
+    # prints: name|os|ip|user  for each saved entry
+    [ -f "$SD_KNOWN" ] || return
+    grep -v '^\s*$\|^#' "$SD_KNOWN" 2>/dev/null || true
+  }
+
+  _sd_save() {
+    local name="$1" os="$2" ip="$3" user="$4"
+    mkdir -p "$KP_DIR"
+    local today; today=$(date +%Y-%m-%d)
+    local tmp=""; [ -f "$SD_KNOWN" ] && tmp=$(grep -v "^${name}|" "$SD_KNOWN" 2>/dev/null || true)
+    printf '%s\n' "$tmp" > "$SD_KNOWN"
+    printf '%s|%s|%s|%s|%s\n' "$name" "$os" "$ip" "$user" "$today" >> "$SD_KNOWN"
+  }
+
+  _sd_do_shutdown() {
+    local os="$1" ip="$2" user="$3"
+    case "$os" in
+      mac|linux)
+        if [ ! -f "$KEY_FILE" ]; then
+          printf "  ${RE}No killport SSH key found. Run 'killport ssh' first to set one up.${R}\n\n"
+          return 1
+        fi
+        printf "  ${D}Sending shutdown to %s@%s...${R}\n" "$user" "$ip"
+        ssh -i "$KEY_FILE" -o ConnectTimeout=5 -o StrictHostKeyChecking=accept-new \
+          "${user}@${ip}" "sudo shutdown -h now" 2>&1 | sed 's/^/  /'
+        ;;
+      windows)
+        printf "  ${D}Sending shutdown to %s...${R}\n" "$ip"
+        if command -v net &>/dev/null; then
+          ssh -i "$KEY_FILE" -o ConnectTimeout=5 -o StrictHostKeyChecking=accept-new \
+            "${user}@${ip}" "shutdown /s /t 0 /f" 2>&1 | sed 's/^/  /' || \
+          printf "  ${Y}SSH attempt failed. Ensure OpenSSH is running on the Windows machine.${R}\n"
+        else
+          printf "  ${RE}Cannot reach Windows machine without SSH configured.${R}\n"
+          return 1
+        fi
+        ;;
+    esac
+  }
+
+  # ── list ──────────────────────────────────────────────────────────────────
+  if [[ "$subcmd" == "list" ]]; then
+    printf "\n${B}${C}  Shutdown — Saved Hosts${R}\n"
+    printf "${C}  ────────────────────────────────────────────${R}\n\n"
+    local count=0
+    while IFS='|' read -r name os ip user date; do
+      [[ -z "$name" || "$name" == \#* ]] && continue
+      (( count++ )) || true
+      printf "  ${G}★${R}  ${B}%-20s${R}  ${C}%-8s${R}  ${D}%-16s${R}  %-12s  %s\n" \
+        "$name" "$os" "$ip" "$user" "$date"
+    done < <(_sd_load)
+    if [[ $count -eq 0 ]]; then
+      printf "  ${D}No saved hosts yet.${R}\n"
+      printf "  ${D}Run 'killport shutdown <ip>' to add one.${R}\n"
+    else
+      printf "\n  ${D}%d host(s) — 'killport shutdown <name>' to shut down${R}\n"
+    fi
+    printf "\n"
+    return
+  fi
+
+  # ── name lookup → shutdown ────────────────────────────────────────────────
+  if [ -n "$subcmd" ] && [[ "$subcmd" != *"."* ]] && [[ "$subcmd" != *":"* ]]; then
+    local found_os="" found_ip="" found_user=""
+    while IFS='|' read -r name os ip user date; do
+      [[ -z "$name" || "$name" == \#* ]] && continue
+      if [[ "$name" == "$subcmd" ]]; then
+        found_os="$os"; found_ip="$ip"; found_user="$user"; break
+      fi
+    done < <(_sd_load)
+    if [[ -n "$found_ip" ]]; then
+      printf "\n${B}${C}  Shutdown — %s${R}\n" "$subcmd"
+      printf "${C}  ────────────────────────────────────────────${R}\n\n"
+      _sd_do_shutdown "$found_os" "$found_ip" "$found_user"
+      printf "\n"
+      return
+    fi
+    # fall through to IP handling if not found (user might have typed an IP)
+  fi
+
+  # ── no-arg: scan network and pick ────────────────────────────────────────
+  if [[ -z "$subcmd" ]]; then
+    printf "\n${B}${C}  Shutdown — Scan Network${R}\n"
+    printf "${C}  ────────────────────────────────────────────${R}\n\n"
+    _net_detect_base 2>/dev/null || { printf "  ${RE}Could not detect local subnet.${R}\n\n"; exit 1; }
+    printf "  ${D}Scanning %s...${R}\n\n" "$NET_SCAN_BASE"
+    local _tmpdir; _tmpdir=$(mktemp -d)
+    for i in $(seq 1 254); do
+      ( ping -c1 -W500 "${NET_SCAN_BASE}.${i}" &>/dev/null || true; touch "$_tmpdir/$i" ) &
+    done
+    wait
+    local -a _hosts=()
+    local _count=0
+    for i in $(seq 1 254); do
+      if [ -f "$_tmpdir/$i" ] && arp -n "${NET_SCAN_BASE}.${i}" 2>/dev/null | grep -q ':'; then
+        (( _count++ )) || true
+        _hosts+=("${NET_SCAN_BASE}.${i}")
+        printf "  ${B}%2d${R}  ${D}%-18s${R}\n" "$_count" "${NET_SCAN_BASE}.${i}"
+      fi
+    done
+    rm -rf "$_tmpdir"
+    if [[ $_count -eq 0 ]]; then
+      printf "  ${D}No hosts found on %s.${R}\n\n" "$NET_SCAN_BASE"; exit 0
+    fi
+    printf "\n"
+    printf "  ${B}Pick a number (1-%d): ${R}" "$_count"
+    local pick; read -r pick; pick="${pick%$'\r'}"
+    if ! [[ "$pick" =~ ^[0-9]+$ ]] || [[ "$pick" -lt 1 ]] || [[ "$pick" -gt $_count ]]; then
+      printf "  ${RE}Invalid selection.${R}\n\n"; exit 1
+    fi
+    subcmd="${_hosts[$((pick-1))]}"
+    printf "\n"
+  fi
+
+  # ── shutdown by IP (first time) ───────────────────────────────────────────
+  local ip="$subcmd"
+
+  printf "\n${B}${C}  Shutdown — %s${R}\n" "$ip"
+  printf "${C}  ────────────────────────────────────────────${R}\n\n"
+
+  # Ask OS
+  printf "  ${B}OS on that machine [mac/linux/windows]: ${R}"
+  local os; read -r os; os="${os%$'\r'}"
+  os=$(printf '%s' "$os" | tr '[:upper:]' '[:lower:]')
+  case "$os" in
+    mac|linux|windows) ;;
+    m) os="mac" ;;
+    l) os="linux" ;;
+    w|win) os="windows" ;;
+    *)
+      printf "  ${RE}Unknown OS '%s'. Use mac, linux, or windows.${R}\n\n" "$os"
+      exit 1
+      ;;
+  esac
+
+  # Ask username (mac/linux only)
+  local user=""
+  if [[ "$os" != "windows" ]]; then
+    printf "  ${B}Username on that machine [%s]: ${R}" "$(whoami)"
+    read -r user; user="${user%$'\r'}"
+    [[ -z "$user" ]] && user="$(whoami)"
+  else
+    printf "  ${B}Username on that machine: ${R}"
+    read -r user; user="${user%$'\r'}"
+  fi
+
+  printf "\n"
+  _sd_do_shutdown "$os" "$ip" "$user"
+  printf "\n"
+
+  # Ask to save
+  printf "  ${D}Save as (leave blank to skip): ${R}"
+  local save_name; read -r save_name; save_name="${save_name%$'\r'}"
+  if [[ -n "$save_name" ]]; then
+    _sd_save "$save_name" "$os" "$ip" "$user"
+    printf "  ${G}✓ Saved as '%s'  —  killport shutdown %s${R}\n\n" "$save_name" "$save_name"
+  else
+    printf "\n"
+  fi
+}
+
 # -------------------------------------------------------
 
 if [ $# -eq 0 ]; then
@@ -3009,6 +3182,12 @@ if [ $# -eq 0 ]; then
   echo "  killport dns <domain>      DNS recon: A/MX/TXT/NS/AXFR zone transfer test"
   echo "  killport forward <p> <h:p> forward a local port to a remote host:port"
   echo "  killport stress <ip:port>  authorized connection flood / stress test"
+  echo ""
+  echo "  *** SHUTDOWN ***"
+  echo "  killport shutdown          scan network and pick a machine to shut down"
+  echo "  killport shutdown <ip>     shut down a remote machine via SSH"
+  echo "  killport shutdown <name>   shut down a saved host by name"
+  echo "  killport shutdown list     show all saved shutdown hosts"
   echo ""
   echo "  *** SSH EASY CONNECT ***"
   echo "  killport ssh               generate a token so another Mac can SSH in"
@@ -3079,6 +3258,10 @@ case "$1" in
 
   stress)
     stress_dispatch "${2:-}"
+    ;;
+
+  shutdown)
+    shutdown_dispatch "${2:-}"
     ;;
 
   ssh)
