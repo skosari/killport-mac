@@ -2,7 +2,7 @@
 
 set -euo pipefail
 
-VERSION="1.10.17"
+VERSION="1.10.18"
 REPO="skosari/killport-mac"
 RAW="https://raw.githubusercontent.com/${REPO}/main"
 API="https://api.github.com/repos/${REPO}/contents"
@@ -2512,7 +2512,9 @@ net_scan_hosts() {
   local _total=254
 
   for i in $(seq 1 254); do
-    ( ping -c1 -W500 "${NET_SCAN_BASE}.${i}" &>/dev/null \
+    ( ping -c1 -W500 "${NET_SCAN_BASE}.${i}" &>/dev/null || true
+      # ARP check catches hosts that block ICMP (e.g. Windows firewall)
+      arp -n "${NET_SCAN_BASE}.${i}" 2>/dev/null | grep -qv "no entry" \
         && touch "$_tmpdir/up/$i" || true
       touch "$_tmpdir/done/$i" ) &
   done
@@ -2632,7 +2634,8 @@ wol_dispatch() {
       NET_SCAN_HOSTS=()
 
       for i in $(seq 1 254); do
-        ( ping -c1 -W500 "${NET_SCAN_BASE}.${i}" &>/dev/null \
+        ( ping -c1 -W500 "${NET_SCAN_BASE}.${i}" &>/dev/null || true
+          arp -n "${NET_SCAN_BASE}.${i}" 2>/dev/null | grep -qv "no entry" \
             && touch "$_tmpdir/up/$i" || true
           touch "$_tmpdir/done/$i" ) &
       done
