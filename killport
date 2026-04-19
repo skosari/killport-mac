@@ -2,7 +2,7 @@
 
 set -euo pipefail
 
-VERSION="1.10.8"
+VERSION="1.10.9"
 REPO="skosari/killport-mac"
 RAW="https://raw.githubusercontent.com/${REPO}/main"
 API="https://api.github.com/repos/${REPO}/contents"
@@ -2453,13 +2453,23 @@ wol_scan_network() {
   if [ -z "$myip" ]; then printf "  Could not determine local IP.\n"; SCANNED_HOSTS=(); return; fi
 
   local base; base=$(printf '%s' "$myip" | cut -d. -f1-3)
-  printf "  Scanning %s.1–254...\n" "$base"
 
   for i in $(seq 1 254); do
     ping -c1 -W1 -t1 "${base}.${i}" &>/dev/null &
   done
+
+  local spin=('⠋' '⠙' '⠹' '⠸' '⠼' '⠴' '⠦' '⠧' '⠇' '⠏') si=0
+  local G=$'\033[0;32m' D=$'\033[2m' R=$'\033[0m'
+  while jobs -r 2>/dev/null | grep -q .; do
+    local found; found=$(arp -a 2>/dev/null | grep -vc incomplete || true)
+    printf "\r  Scanning %s.1–254  %s  ${D}%d host(s) found${R}" "$base" "${spin[$si]}" "$found"
+    si=$(( (si + 1) % 10 ))
+    sleep 0.1
+  done
   wait
   sleep 0.3
+  local final; final=$(arp -a 2>/dev/null | grep -vc incomplete || true)
+  printf "\r  Scanning %s.1–254  ${G}done${R}  ${D}%d host(s) found${R}               \n" "$base" "$final"
 
   SCANNED_HOSTS=()
   while IFS= read -r line; do
