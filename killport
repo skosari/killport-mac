@@ -2,7 +2,7 @@
 
 set -euo pipefail
 
-VERSION="1.10.12"
+VERSION="1.10.13"
 REPO="skosari/killport-mac"
 RAW="https://raw.githubusercontent.com/${REPO}/main"
 API="https://api.github.com/repos/${REPO}/contents"
@@ -2453,7 +2453,7 @@ wol_start_scan() {
   WOL_SCAN_BASE=$(printf '%s' "$myip" | cut -d. -f1-3)
   WOL_PIDS=()
   for i in $(seq 1 254); do
-    ping -c1 -W1 -t1 "${WOL_SCAN_BASE}.${i}" &>/dev/null &
+    ping -c1 -W500 "${WOL_SCAN_BASE}.${i}" &>/dev/null &
     WOL_PIDS+=($!)
   done
 }
@@ -2563,7 +2563,8 @@ wol_dispatch() {
         _wol_arp_poll
         printf "\r  %s  ${D}scanning...${R}   " "${spin[$si]}"
         si=$(( (si + 1) % 10 ))
-        if IFS= read -r -t 0.08 _wol_early 2>/dev/null; then
+        if read -r -t 0 2>/dev/null; then
+          IFS= read -r _wol_early 2>/dev/null || true
           _wol_early=$(printf '%s' "$_wol_early" | tr -d '[:space:]')
           if [[ "$_wol_early" =~ ^[0-9]+$ ]] && [ "$_wol_early" -ge 1 ] && [ "$_wol_early" -le "$_wol_count" ]; then
             kill "${WOL_PIDS[@]+"${WOL_PIDS[@]}"}" 2>/dev/null || true
@@ -2573,6 +2574,7 @@ wol_dispatch() {
           fi
           _wol_early=""
         fi
+        sleep 0.1
       done
 
       wait 2>/dev/null || true
