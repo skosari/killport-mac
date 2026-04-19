@@ -2,7 +2,7 @@
 
 set -euo pipefail
 
-VERSION="1.10.20"
+VERSION="1.10.21"
 REPO="skosari/killport-mac"
 RAW="https://raw.githubusercontent.com/${REPO}/main"
 API="https://api.github.com/repos/${REPO}/contents"
@@ -32,7 +32,7 @@ banner() {
 list_ports() {
   echo "Listening ports:"
   echo ""
-  lsof -iTCP -iUDP -sTCP:LISTEN -P -n 2>/dev/null | awk 'NR>1 {printf "  %-8s %-10s %-10s %s\n", $9, $1, $2, $8}' | sort -t: -k2 -n
+  sudo lsof -iTCP -iUDP -sTCP:LISTEN -P -n 2>/dev/null | awk 'NR>1 {printf "  %-8s %-10s %-10s %s\n", $9, $1, $2, $8}' | sort -t: -k2 -n
 }
 
 open_port() {
@@ -80,7 +80,7 @@ status_port() {
 
   # Actively listening
   local PIDS PIDS_FLAT
-  PIDS=$(lsof -ti :"$PORT" 2>/dev/null || true)
+  PIDS=$(sudo lsof -ti :"$PORT" 2>/dev/null || true)
   PIDS_FLAT=$(echo "$PIDS" | tr '\n' ',' | sed 's/,$//')
   if [ -n "$PIDS" ]; then
     local NAME
@@ -112,7 +112,7 @@ open_ports() {
   local count=0 listening_count=0
   while read -r port; do
     local PIDS NAME
-    PIDS=$(lsof -ti :"$port" 2>/dev/null || true)
+    PIDS=$(sudo lsof -ti :"$port" 2>/dev/null || true)
     if [ -n "$PIDS" ]; then
       NAME=$(echo "$PIDS" | xargs -I{} ps -p {} -o comm= 2>/dev/null | head -1 || true)
       printf "  ${G}●${R}  ${B}%-8s${R}  ${G}listening${R}   ${D}%s${R}\n" "$port" "$NAME"
@@ -146,11 +146,11 @@ closed_ports() {
   while read -r port; do
     if ! echo " $open_list " | grep -q " $port "; then
       local NAME
-      NAME=$(lsof -ti :"$port" 2>/dev/null | xargs -I{} ps -p {} -o comm= 2>/dev/null | head -1 || true)
+      NAME=$(sudo lsof -ti :"$port" 2>/dev/null | xargs -I{} ps -p {} -o comm= 2>/dev/null | head -1 || true)
       printf "  ${Y}◆${R}  ${B}%-8s${R}  ${D}local only${R}   ${D}%s${R}\n" "$port" "$NAME"
       (( count++ )) || true
     fi
-  done < <(lsof -iTCP -sTCP:LISTEN -P -n 2>/dev/null | awk 'NR>1 {print $9}' | grep -oE '[0-9]+$' | sort -un)
+  done < <(sudo lsof -iTCP -sTCP:LISTEN -P -n 2>/dev/null | awk 'NR>1 {print $9}' | grep -oE '[0-9]+$' | sort -un)
 
   if [ "$count" -eq 0 ]; then
     printf "  ${D}No locally-only listening ports found.${R}\n\n"
@@ -205,7 +205,7 @@ ports_inspect() {
   local total=0 open_count=0
   while read -r port; do
     local NAME raw_name
-    raw_name=$(lsof -ti :"$port" 2>/dev/null | xargs -I{} ps -p {} -o comm= 2>/dev/null | head -1 || true)
+    raw_name=$(sudo lsof -ti :"$port" 2>/dev/null | xargs -I{} ps -p {} -o comm= 2>/dev/null | head -1 || true)
     NAME="${raw_name##*/}"
     if [ ${#NAME} -gt 14 ]; then NAME="${NAME:0:13}…"; fi
 
@@ -219,7 +219,7 @@ ports_inspect() {
       printf "  ${D}○  %-8s  %-14s  blocked${R}\n" "$port" "$NAME"
     fi
     (( total++ )) || true
-  done < <(lsof -iTCP -sTCP:LISTEN -P -n 2>/dev/null | awk 'NR>1 {print $9}' | grep -oE '[0-9]+$' | sort -un)
+  done < <(sudo lsof -iTCP -sTCP:LISTEN -P -n 2>/dev/null | awk 'NR>1 {print $9}' | grep -oE '[0-9]+$' | sort -un)
 
   printf "\n${C}  ────────────────────────────────────────────${R}\n"
   printf "  ${D}%d port(s) listening  ·  %d open to external access${R}\n" "$total" "$open_count"
@@ -2769,7 +2769,8 @@ if [ $# -eq 0 ]; then
   banner
   _remote=$(fetch_remote_version 2)
   _CY=$'\033[0;33m' _CR=$'\033[0m' _CD=$'\033[2m'
-  if [ -n "$_remote" ] && [ "$_remote" != "$VERSION" ]; then
+  if [ -n "$_remote" ] && [ "$_remote" != "$VERSION" ] && \
+     [ "$(printf '%s\n' "$VERSION" "$_remote" | sort -V | tail -1)" = "$_remote" ]; then
     echo "  v${VERSION}  ${_CY}→  v${_remote} available${_CR}  ${_CD}(run: killport update)${_CR}"
   else
     echo "  v${VERSION}"
@@ -2951,7 +2952,7 @@ case "$1" in
       echo "Error: '$PORT' is not a valid port number (1–65535)"
       exit 1
     fi
-    PIDS=$(lsof -ti :"$PORT" 2>/dev/null || true)
+    PIDS=$(sudo lsof -ti :"$PORT" 2>/dev/null || true)
     if [ -z "$PIDS" ]; then echo "Nothing running on port $PORT"; exit 0; fi
     echo "Port $PORT is in use:"
     echo ""
