@@ -15,7 +15,7 @@ Also available for [Linux](https://github.com/skosari/killport-linux) and [Windo
 
 AI-powered pentesting, vulnerability scanning, and automated hardening via [Ollama](https://ollama.com) — runs entirely on your hardware
 
-[![Version](https://img.shields.io/badge/version-1.10.3-00b4d8?style=flat-square)](#)
+[![Version](https://img.shields.io/badge/version-1.10.8-00b4d8?style=flat-square)](#)
 [![Platform](https://img.shields.io/badge/platform-macOS-00b4d8?style=flat-square&logo=apple&logoColor=white)](#)
 [![Shell](https://img.shields.io/badge/shell-bash-00b4d8?style=flat-square&logo=gnubash&logoColor=white)](#)
 [![License](https://img.shields.io/badge/license-Source%20Available-00b4d8?style=flat-square)](LICENSE)
@@ -75,6 +75,12 @@ curl -fsSL https://raw.githubusercontent.com/skosari/killport-mac/main/killport 
 | `killport dns <domain>` | DNS recon: A/MX/TXT/NS/AXFR zone transfer test |
 | `killport forward <port> <host:port>` | Forward a local port to a remote host:port |
 | `killport stress <ip:port>` | Authorized connection flood / stress test |
+| `killport wol` | Wake a LAN computer — scan network or pick a saved host |
+| `killport wol <name>` | Wake a saved host by name |
+| `killport wol <mac>` | Wake by MAC address directly |
+| `killport wol save <name> <mac> [ip]` | Save a host for quick wake |
+| `killport wol delete <name>` | Remove a saved host |
+| `killport wol list` | Show all saved WoL hosts |
 | `killport attack <ip>` | AI pentest: scan 47 common ports + analysis |
 | `killport attack allports <ip>` | AI pentest: scan all 65535 ports + analysis |
 | `killport attack <ip>:<port>` | AI pentest: single port deep dive |
@@ -572,6 +578,47 @@ killport attack log                     # view past attack reports
 | `WORDLIST` | Credential spray: SSH, FTP, Redis, MySQL, PostgreSQL, HTTP |
 | `NMAP_SCRIPT` | Run any nmap NSE script |
 | `CRACK_HASH` | Crack MD5/SHA1/SHA256/bcrypt via hashcat or john |
+
+### Wake on LAN → `killport wol`
+
+Wake any machine on your network — Mac, PC, or Linux — as long as Wake on LAN is enabled in its BIOS or system settings.
+
+```sh
+killport wol                        # scan network, pick a machine to wake
+killport wol mydesktop              # wake a saved host by name
+killport wol aa:bb:cc:dd:ee:ff      # wake by MAC address directly
+```
+
+Running `killport wol` with no arguments ping-sweeps your local /24 subnet, reads the ARP table, and shows every reachable device with its MAC address. Saved hosts appear at the top marked with `★`.
+
+```
+  Wake on LAN
+  ────────────────────────────────────────────
+
+  Scanning 192.168.1.1–254...
+
+  ★ = saved host
+
+   1  ★ mydesktop            aa:bb:cc:dd:ee:ff  192.168.1.50
+   2    MacBook-Pro.local     11:22:33:44:55:66  192.168.1.12
+   3    raspberrypi.local     de:ad:be:ef:ca:fe  192.168.1.99
+
+  Enter number to wake, or 's <num> <name>' to save a discovered host:
+  → 
+```
+
+From the list, enter a number to send the magic packet, or type `s 2 mydesktop` to save host #2 as "mydesktop" and wake it in one step.
+
+**Saving hosts for quick access:**
+
+```sh
+killport wol save mydesktop aa:bb:cc:dd:ee:ff 192.168.1.50
+killport wol save homeserver de:ad:be:ef:ca:fe
+killport wol list
+killport wol delete mydesktop
+```
+
+Saved hosts are stored in `~/.config/killport/wol_hosts`. The magic packet is broadcast over UDP port 9 using Python3 — no extra tools needed.
 
 ---
 

@@ -2,7 +2,7 @@
 
 set -euo pipefail
 
-VERSION="1.10.7"
+VERSION="1.10.8"
 REPO="skosari/killport-mac"
 RAW="https://raw.githubusercontent.com/${REPO}/main"
 API="https://api.github.com/repos/${REPO}/contents"
@@ -2397,6 +2397,241 @@ fix_dispatch() {
   fix_run "$sub"
 }
 
+# ── Wake on LAN ──────────────────────────────────────────────
+WOL_HOSTS="${HOME}/.config/killport/wol_hosts"
+
+wol_send() {
+  local mac="$1" ip="${2:-255.255.255.255}"
+  mac=$(printf '%s' "$mac" | tr '[:upper:]' '[:lower:]' | tr '-' ':')
+  if ! [[ "$mac" =~ ^([0-9a-f]{2}:){5}[0-9a-f]{2}$ ]]; then
+    printf "  Invalid MAC address: %s\n" "$mac"; return 1
+  fi
+  python3 - "$mac" "$ip" <<'PYEOF'
+import sys, socket
+mac = sys.argv[1]
+ip  = sys.argv[2] if len(sys.argv) > 2 and sys.argv[2] != '255.255.255.255' else '<broadcast>'
+mac_bytes = bytes.fromhex(mac.replace(':',''))
+magic = b'\xff'*6 + mac_bytes*16
+with socket.socket(socket.AF_INET, socket.SOCK_DGRAM) as s:
+    s.setsockopt(socket.SOL_SOCKET, socket.SO_BROADCAST, 1)
+    s.sendto(magic, ('<broadcast>', 9))
+    if ip != '<broadcast>':
+        s.sendto(magic, (ip, 9))
+print("ok")
+PYEOF
+}
+
+wol_load_hosts() {
+  WOL_SAVED=()
+  [ -f "$WOL_HOSTS" ] || return 0
+  while IFS= read -r line; do
+    [[ -z "$line" || "$line" =~ ^# ]] && continue
+    WOL_SAVED+=("$line")
+  done < "$WOL_HOSTS"
+}
+
+wol_save_host() {
+  local name="$1" mac="$2" ip="${3:-}"
+  mac=$(printf '%s' "$mac" | tr '[:upper:]' '[:lower:]' | tr '-' ':')
+  if ! [[ "$mac" =~ ^([0-9a-f]{2}:){5}[0-9a-f]{2}$ ]]; then
+    printf "  Invalid MAC: %s\n" "$mac"; return 1
+  fi
+  mkdir -p "${HOME}/.config/killport"
+  local tmp=""
+  [ -f "$WOL_HOSTS" ] && tmp=$(grep -v "^${name} " "$WOL_HOSTS" 2>/dev/null || true)
+  printf '%s\n' "$tmp" > "$WOL_HOSTS"
+  printf '%s %s %s\n' "$name" "$mac" "$ip" >> "$WOL_HOSTS"
+}
+
+wol_scan_network() {
+  local iface
+  iface=$(route -n get default 2>/dev/null | awk '/interface:/{print $2}' | head -1)
+  [ -z "$iface" ] && iface=$(ifconfig -l 2>/dev/null | tr ' ' '\n' | grep -vE '^(lo|utun|awdl|llw|bridge|gif|stf)' | head -1)
+
+  local myip
+  myip=$(ipconfig getifaddr "$iface" 2>/dev/null || ifconfig "$iface" 2>/dev/null | awk '/inet /{print $2}' | head -1)
+  if [ -z "$myip" ]; then printf "  Could not determine local IP.\n"; SCANNED_HOSTS=(); return; fi
+
+  local base; base=$(printf '%s' "$myip" | cut -d. -f1-3)
+  printf "  Scanning %s.1–254...\n" "$base"
+
+  for i in $(seq 1 254); do
+    ping -c1 -W1 -t1 "${base}.${i}" &>/dev/null &
+  done
+  wait
+  sleep 0.3
+
+  SCANNED_HOSTS=()
+  while IFS= read -r line; do
+    local ip mac
+    ip=$(printf '%s' "$line" | grep -oE '\([0-9]+\.[0-9]+\.[0-9]+\.[0-9]+\)' | tr -d '()')
+    mac=$(printf '%s' "$line" | grep -oE '[0-9a-f:]{17}' | head -1)
+    [ -z "$ip" ] || [ -z "$mac" ] && continue
+    [[ "$mac" == "ff:ff:ff:ff:ff:ff" ]] && continue
+    local hostname; hostname=$(printf '%s' "$line" | awk '{print $1}')
+    SCANNED_HOSTS+=("${hostname} ${ip} ${mac}")
+  done < <(arp -a 2>/dev/null | grep -v incomplete)
+}
+
+wol_dispatch() {
+  local C=$'\033[0;36m' G=$'\033[0;32m' Y=$'\033[0;33m' RE=$'\033[0;31m'
+  local D=$'\033[2m' B=$'\033[1m' R=$'\033[0m'
+  local subcmd="${1:-}"
+
+  case "$subcmd" in
+    save)
+      local name="${2:-}" mac="${3:-}" ip="${4:-}"
+      [ -z "$name" ] || [ -z "$mac" ] && { printf "  Usage: killport wol save <name> <mac> [ip]\n"; exit 1; }
+      wol_save_host "$name" "$mac" "$ip" && printf "  ${G}Saved:${R} %s  %s\n\n" "$name" "$mac"
+      ;;
+    delete|remove)
+      local name="${2:-}"
+      [ -z "$name" ] && { printf "  Usage: killport wol delete <name>\n"; exit 1; }
+      if [ -f "$WOL_HOSTS" ]; then
+        local tmp; tmp=$(grep -v "^${name} " "$WOL_HOSTS" 2>/dev/null || true)
+        printf '%s\n' "$tmp" > "$WOL_HOSTS"
+        printf "  ${G}Removed:${R} %s\n\n" "$name"
+      else
+        printf "  ${Y}No saved hosts file found.${R}\n\n"
+      fi
+      ;;
+    list)
+      wol_load_hosts
+      printf "\n${B}${C}  Saved WoL Hosts${R}\n"
+      printf "${C}  ────────────────────────────────────────────${R}\n\n"
+      if [ "${#WOL_SAVED[@]}" -eq 0 ]; then
+        printf "  ${D}None. Use 'killport wol save <name> <mac> [ip]' to add one.${R}\n\n"
+        return
+      fi
+      for entry in "${WOL_SAVED[@]}"; do
+        local n m i
+        n=$(printf '%s' "$entry" | awk '{print $1}')
+        m=$(printf '%s' "$entry" | awk '{print $2}')
+        i=$(printf '%s' "$entry" | awk '{print $3}')
+        printf "  ${G}★${R}  ${B}%-20s${R}  %s  ${D}%s${R}\n" "$n" "$m" "$i"
+      done
+      printf "\n"
+      ;;
+    ""|scan)
+      stty sane 2>/dev/null || true
+      printf "\n${B}${C}  Wake on LAN${R}\n"
+      printf "${C}  ────────────────────────────────────────────${R}\n\n"
+
+      wol_load_hosts
+      wol_scan_network
+      printf "\n"
+
+      local -a entries=()
+      local -a labels=()
+
+      for entry in "${WOL_SAVED[@]}"; do
+        local n m i
+        n=$(printf '%s' "$entry" | awk '{print $1}')
+        m=$(printf '%s' "$entry" | awk '{print $2}')
+        i=$(printf '%s' "$entry" | awk '{print $3}')
+        entries+=("$m|$i|$n")
+        labels+=("$(printf "${G}★${R} ${B}%-20s${R}  %s  ${D}%s${R}" "$n" "$m" "$i")")
+      done
+
+      for scanned in "${SCANNED_HOSTS[@]}"; do
+        local sh_host sh_ip sh_mac
+        sh_host=$(printf '%s' "$scanned" | awk '{print $1}')
+        sh_ip=$(printf '%s' "$scanned"   | awk '{print $2}')
+        sh_mac=$(printf '%s' "$scanned"  | awk '{print $3}')
+        local already=0
+        for entry in "${WOL_SAVED[@]}"; do
+          local em; em=$(printf '%s' "$entry" | awk '{print $2}')
+          [ "$em" = "$sh_mac" ] && already=1
+        done
+        [ "$already" -eq 1 ] && continue
+        entries+=("$sh_mac|$sh_ip|$sh_host")
+        labels+=("$(printf "  %-20s  %s  ${D}%s${R}" "$sh_host" "$sh_mac" "$sh_ip")")
+      done
+
+      if [ "${#entries[@]}" -eq 0 ]; then
+        printf "  ${Y}No hosts found. Make sure WoL is enabled in BIOS/settings on target machines.${R}\n\n"
+        printf "  ${D}Add a known host:  killport wol save <name> <mac> [ip]${R}\n\n"
+        return
+      fi
+
+      [ "${#WOL_SAVED[@]}" -gt 0 ] && printf "  ${G}★${R} = saved host\n\n"
+
+      local i=1
+      for lbl in "${labels[@]}"; do
+        printf "  ${B}%2d${R}  %s\n" "$i" "$lbl"
+        (( i++ )) || true
+      done
+
+      printf "\n  ${D}Enter number to wake, or 's <num> <name>' to save a discovered host:${R}\n  → "
+      read -r _sel; _sel="${_sel%$'\r'}"
+
+      if [[ "$_sel" =~ ^s[[:space:]]+([0-9]+)[[:space:]]+(.+)$ ]]; then
+        local s_idx="${BASH_REMATCH[1]}" s_name="${BASH_REMATCH[2]}"
+        if [ "$s_idx" -ge 1 ] && [ "$s_idx" -le "${#entries[@]}" ]; then
+          local e="${entries[$(( s_idx - 1 ))]}"
+          local e_mac="${e%%|*}" e_rest="${e#*|}" e_ip="${e_rest%%|*}"
+          wol_save_host "$s_name" "$e_mac" "$e_ip"
+          printf "  ${G}Saved as '%s'. Waking now...${R}\n" "$s_name"
+          _sel="$s_idx"
+        else
+          printf "  ${Y}Invalid number.${R}\n\n"; return
+        fi
+      fi
+
+      if [[ "$_sel" =~ ^[0-9]+$ ]] && [ "$_sel" -ge 1 ] && [ "$_sel" -le "${#entries[@]}" ]; then
+        local e="${entries[$(( _sel - 1 ))]}"
+        local e_mac="${e%%|*}" e_rest="${e#*|}" e_ip="${e_rest%%|*}" e_name="${e_rest#*|}"
+        printf "\n  Waking ${B}%s${R}  ${D}%s${R}  %s\n" "$e_name" "$e_mac" "$e_ip"
+        if wol_send "$e_mac" "$e_ip" 2>/dev/null | grep -q ok; then
+          printf "  ${G}Magic packet sent.${R}\n\n"
+        else
+          printf "  ${RE}Failed to send magic packet (is python3 installed?).${R}\n\n"
+        fi
+      else
+        printf "  ${D}Cancelled.${R}\n\n"
+      fi
+      ;;
+    *)
+      wol_load_hosts
+      local found_mac="" found_ip=""
+      for entry in "${WOL_SAVED[@]}"; do
+        local n m i
+        n=$(printf '%s' "$entry" | awk '{print $1}')
+        m=$(printf '%s' "$entry" | awk '{print $2}')
+        i=$(printf '%s' "$entry" | awk '{print $3}')
+        if [ "$n" = "$subcmd" ]; then found_mac="$m"; found_ip="$i"; fi
+      done
+      if [ -n "$found_mac" ]; then
+        printf "\n  Waking ${B}%s${R}  ${D}%s${R}\n" "$subcmd" "$found_mac"
+        if wol_send "$found_mac" "$found_ip" 2>/dev/null | grep -q ok; then
+          printf "  ${G}Magic packet sent.${R}\n\n"
+        else
+          printf "  ${RE}Failed to send magic packet.${R}\n\n"
+        fi
+        return
+      fi
+      if [[ "$subcmd" =~ ^([0-9a-fA-F]{2}[:-]){5}[0-9a-fA-F]{2}$ ]]; then
+        printf "\n  Waking ${B}%s${R}\n" "$subcmd"
+        if wol_send "$subcmd" 2>/dev/null | grep -q ok; then
+          printf "  ${G}Magic packet sent.${R}\n\n"
+        else
+          printf "  ${RE}Failed to send magic packet.${R}\n\n"
+        fi
+        return
+      fi
+      printf "  No saved host named '%s'.\n" "$subcmd"
+      printf "  Usage:\n"
+      printf "    killport wol              scan network + pick a host to wake\n"
+      printf "    killport wol <name>       wake a saved host by name\n"
+      printf "    killport wol <mac>        wake by MAC address directly\n"
+      printf "    killport wol save <name> <mac> [ip]\n"
+      printf "    killport wol delete <name>\n"
+      printf "    killport wol list\n\n"
+      exit 1
+      ;;
+  esac
+}
+
 # -------------------------------------------------------
 
 if [ $# -eq 0 ]; then
@@ -2436,6 +2671,10 @@ if [ $# -eq 0 ]; then
   echo "  killport config            configure Ollama host and model"
   echo "  killport attack log        view attack history"
   echo "  killport stress <ip:port>  authorized connection flood / stress test"
+  echo "  killport wol               wake a LAN computer (scan network or use saved hosts)"
+  echo "  killport wol <name>        wake a saved host by name"
+  echo "  killport wol save <n> <mac> [ip]  save a host for quick wake"
+  echo "  killport wol list          show saved WoL hosts"
   echo "  killport update            update to the latest version"
   echo "  killport uninstall         remove killport and all firewall rules"
   echo ""
@@ -2490,6 +2729,10 @@ case "$1" in
 
   stress)
     stress_dispatch "${2:-}"
+    ;;
+
+  wol)
+    wol_dispatch "${2:-}" "${3:-}" "${4:-}" "${5:-}"
     ;;
 
   uninstall)
