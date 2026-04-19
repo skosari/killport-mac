@@ -81,7 +81,7 @@ curl -fsSL https://raw.githubusercontent.com/skosari/killport-mac/main/killport 
 | `killport ssh` | Generate a token so another Mac can SSH into this one |
 | `killport ssh ks:<token>` | Accept a token — adds their key and enables SSH access |
 | `killport ssh list` | Show all saved SSH connections |
-| `killport ssh <name>` | Show the connect command for a saved connection |
+| `killport ssh <name>` | SSH to a saved connection using your key |
 | `killport wol` | Wake a LAN computer — scan network or pick a saved host |
 | `killport wol <name>` | Wake a saved host by name |
 | `killport wol save <name> <mac> [ip]` | Save a host for quick wake |
