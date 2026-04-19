@@ -1,8 +1,9 @@
 class Killport < Formula
-  desc "Kill whatever process is running on a given port"
+  desc "Kill processes by port, manage firewall, SSH, WoL, and more"
   homepage "https://github.com/skosari/killport-mac"
-  url "https://github.com/skosari/killport-mac/archive/refs/tags/v1.0.0.tar.gz"
-  sha256 "88b80662eb573ebdb80e6ade66ece83f0c4ac55e41ebc98f9eb5d6492413410e"
+  url "https://raw.githubusercontent.com/skosari/killport-mac/main/killport"
+  sha256 "3f5e465f7f467183ff6d05306cae5ba78bf175847fa9c44e6c4795c13ad4c064"
+  version "1.10.32"
   license "MIT"
 
   def install
@@ -10,6 +11,6 @@ class Killport < Formula
   end
 
   test do
-    assert_match "Usage: killport", shell_output("#{bin}/killport 2>&1", 1)
+    assert_match "killport", shell_output("#{bin}/killport --help 2>&1")
   end
 end
