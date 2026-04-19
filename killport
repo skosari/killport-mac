@@ -2,7 +2,7 @@
 
 set -euo pipefail
 
-VERSION="1.10.26"
+VERSION="1.10.27"
 REPO="skosari/killport-mac"
 RAW="https://raw.githubusercontent.com/${REPO}/main"
 API="https://api.github.com/repos/${REPO}/contents"
@@ -2807,15 +2807,43 @@ wol_dispatch() {
 ssh_dispatch() {
   local C=$'\033[0;36m' G=$'\033[0;32m' Y=$'\033[0;33m' RE=$'\033[0;31m'
   local D=$'\033[2m' B=$'\033[1m' R=$'\033[0m'
-  local token="${1:-}"
+  local subcmd="${1:-}"
 
   local KP_DIR="$HOME/.killport"
   local KEY_FILE="$KP_DIR/id_ed25519"
   local PUB_FILE="$KP_DIR/id_ed25519.pub"
+  local SSH_KNOWN="$KP_DIR/ssh_known"
 
-  # ── accept mode ──────────────────────────────────────────────────────────
-  if [[ "$token" == ks:* ]]; then
-    local raw="${token#ks:}"
+  _ssh_our_ip() {
+    ipconfig getifaddr en0 2>/dev/null \
+      || ipconfig getifaddr en1 2>/dev/null \
+      || ipconfig getifaddr en2 2>/dev/null \
+      || echo "<this-mac-ip>"
+  }
+
+  # ── list mode ────────────────────────────────────────────────────────────
+  if [[ "$subcmd" == "list" ]]; then
+    printf "\n${B}${C}  SSH Easy Connect — Saved Keys${R}\n"
+    printf "${C}  ────────────────────────────────────────────${R}\n\n"
+    if [ ! -f "$SSH_KNOWN" ] || [ ! -s "$SSH_KNOWN" ]; then
+      printf "  ${D}No saved keys yet.${R}\n"
+      printf "  ${D}Run 'killport ssh ks:<token>' to accept a connection.${R}\n\n"
+      return
+    fi
+    local count=0
+    while IFS='|' read -r name ruser rip rdate; do
+      [[ -z "$name" || "$name" == \#* ]] && continue
+      (( count++ )) || true
+      printf "  ${G}★${R}  ${B}%-20s${R}  ${C}%-14s${R}  ${D}%-16s${R}  %s\n" \
+        "$name" "$ruser" "$rip" "$rdate"
+    done < "$SSH_KNOWN"
+    printf "\n  ${D}%d connection(s) — 'killport ssh <name>' for the connect command${R}\n\n" "$count"
+    return
+  fi
+
+  # ── accept (ks:token) mode ───────────────────────────────────────────────
+  if [[ "$subcmd" == ks:* ]]; then
+    local raw="${subcmd#ks:}"
     local json
     json=$(printf '%s' "$raw" | base64 -D 2>/dev/null) || {
       printf "\n  ${RE}Invalid token (base64 decode failed).${R}\n\n"; exit 1
@@ -2841,33 +2869,62 @@ ssh_dispatch() {
       printf '\n%s\n' "$remote_pubkey" >> "$HOME/.ssh/authorized_keys"
       printf "\n  ${G}✓ Key added to ~/.ssh/authorized_keys${R}\n"
     fi
-
     printf "  ${D}From: %s@%s${R}\n\n" "$remote_user" "$remote_ip"
 
-    local our_ip our_user
-    our_user=$(whoami)
-    our_ip=$(ipconfig getifaddr en0 2>/dev/null \
-          || ipconfig getifaddr en1 2>/dev/null \
-          || ipconfig getifaddr en2 2>/dev/null \
-          || echo "<this-mac-ip>")
-
-    # Advisory: check Remote Login without sudo (just inspect launchd)
     if ! launchctl list com.openssh.sshd &>/dev/null; then
       printf "  ${Y}⚠  Remote Login may be off on this Mac.${R}\n"
       printf "  ${D}Enable: System Settings → General → Sharing → Remote Login${R}\n\n"
     fi
 
+    local our_ip our_user
+    our_user=$(whoami)
+    our_ip=$(_ssh_our_ip)
     printf "  ${B}They can now connect with:${R}\n"
     printf "  ${C}ssh -i ~/.killport/id_ed25519 %s@%s${R}\n\n" "$our_user" "$our_ip"
+
+    # ── prompt for save name ─────────────────────────────────────────────
+    mkdir -p "$KP_DIR"
+    local default_name="$remote_user"
+    if grep -q "^${default_name}|" "$SSH_KNOWN" 2>/dev/null; then
+      local suffix; suffix=$(printf '%s' "$remote_ip" | awk -F. '{print $NF}')
+      default_name="${remote_user}-${suffix}"
+    fi
+    printf "  ${D}Save as [%s]: ${R}" "$default_name"
+    local save_name; read -r save_name; save_name="${save_name%$'\r'}"
+    [ -z "$save_name" ] && save_name="$default_name"
+
+    local today; today=$(date +%Y-%m-%d)
+    local tmp=""; [ -f "$SSH_KNOWN" ] && tmp=$(grep -v "^${save_name}|" "$SSH_KNOWN" 2>/dev/null || true)
+    printf '%s\n' "$tmp" > "$SSH_KNOWN"
+    printf '%s|%s|%s|%s\n' "$save_name" "$remote_user" "$remote_ip" "$today" >> "$SSH_KNOWN"
+    printf "  ${G}✓ Saved as '%s'  —  killport ssh %s${R}\n\n" "$save_name" "$save_name"
     return
   fi
 
-  # ── error if non-empty non-token arg ─────────────────────────────────────
-  if [ -n "$token" ]; then
-    printf "\n  ${RE}Unrecognised argument.${R}\n"
-    printf "  Usage:\n"
-    printf "    killport ssh              generate your token\n"
-    printf "    killport ssh ks:<token>   accept a token from another machine\n\n"
+  # ── name lookup ──────────────────────────────────────────────────────────
+  if [ -n "$subcmd" ]; then
+    if [ -f "$SSH_KNOWN" ]; then
+      local found_user="" found_ip="" found_date=""
+      while IFS='|' read -r name ruser rip rdate; do
+        [[ -z "$name" || "$name" == \#* ]] && continue
+        if [ "$name" = "$subcmd" ]; then
+          found_user="$ruser"; found_ip="$rip"; found_date="$rdate"; break
+        fi
+      done < "$SSH_KNOWN"
+      if [ -n "$found_user" ]; then
+        local our_ip our_user
+        our_user=$(whoami)
+        our_ip=$(_ssh_our_ip)
+        printf "\n${B}${C}  SSH Easy Connect — %s${R}\n" "$subcmd"
+        printf "${C}  ────────────────────────────────────────────${R}\n\n"
+        printf "  ${D}%s (%s) — key accepted %s${R}\n\n" "$found_user" "$found_ip" "$found_date"
+        printf "  ${B}They connect to this Mac with:${R}\n"
+        printf "  ${C}ssh -i ~/.killport/id_ed25519 %s@%s${R}\n\n" "$our_user" "$our_ip"
+        return
+      fi
+    fi
+    printf "\n  ${RE}No saved connection named '%s'.${R}\n" "$subcmd"
+    printf "  ${D}Run 'killport ssh list' to see saved connections.${R}\n\n"
     exit 1
   fi
 
@@ -2889,10 +2946,7 @@ ssh_dispatch() {
   local pubkey local_ip local_user json token_b64
   pubkey=$(cat "$PUB_FILE")
   local_user=$(whoami)
-  local_ip=$(ipconfig getifaddr en0 2>/dev/null \
-          || ipconfig getifaddr en1 2>/dev/null \
-          || ipconfig getifaddr en2 2>/dev/null \
-          || echo "unknown")
+  local_ip=$(_ssh_our_ip)
 
   json=$(python3 -c "
 import json, sys
@@ -2954,6 +3008,8 @@ if [ $# -eq 0 ]; then
   echo "  *** SSH EASY CONNECT ***"
   echo "  killport ssh               generate a token so another Mac can SSH in"
   echo "  killport ssh ks:<token>    accept a token — adds their key, enables SSH"
+  echo "  killport ssh list          show all saved SSH connections"
+  echo "  killport ssh <name>        show the connect command for a saved connection"
   echo ""
   echo "  *** WAKE ON LAN ***"
   echo "  killport wol               scan network and wake or save host"

@@ -15,7 +15,7 @@ Also available for [Linux](https://github.com/skosari/killport-linux) and [Windo
 
 AI-powered pentesting, vulnerability scanning, and automated hardening via [Ollama](https://ollama.com) — runs entirely on your hardware
 
-[![Version](https://img.shields.io/badge/version-1.10.26-00b4d8?style=flat-square)](#)
+[![Version](https://img.shields.io/badge/version-1.10.27-00b4d8?style=flat-square)](#)
 [![Platform](https://img.shields.io/badge/platform-macOS-00b4d8?style=flat-square&logo=apple&logoColor=white)](#)
 [![Shell](https://img.shields.io/badge/shell-bash-00b4d8?style=flat-square&logo=gnubash&logoColor=white)](#)
 [![License](https://img.shields.io/badge/license-Source%20Available-00b4d8?style=flat-square)](LICENSE)
@@ -80,6 +80,8 @@ curl -fsSL https://raw.githubusercontent.com/skosari/killport-mac/main/killport 
 | `killport stress <ip:port>` | Authorized connection flood / stress test |
 | `killport ssh` | Generate a token so another Mac can SSH into this one |
 | `killport ssh ks:<token>` | Accept a token — adds their key and enables SSH access |
+| `killport ssh list` | Show all saved SSH connections |
+| `killport ssh <name>` | Show the connect command for a saved connection |
 | `killport wol` | Wake a LAN computer — scan network or pick a saved host |
 | `killport wol <name>` | Wake a saved host by name |
 | `killport wol save <name> <mac> [ip]` | Save a host for quick wake |
@@ -627,6 +629,23 @@ killport ssh ks:<token>
 ```
 
 The token is self-contained — it encodes your public key, username, and IP as base64 JSON. No server, no pastebin, no manual file editing. Works Mac↔Mac and Mac↔Linux.
+
+**After accepting, the connection is saved by name.** Look it up any time without memorising IPs:
+
+```sh
+killport ssh list          # see all saved connections
+killport ssh sams-mbp      # print the exact ssh command for that person
+```
+
+```
+  SSH Easy Connect — sams-mbp
+  ────────────────────────────────────────────
+
+  sam (192.168.1.42) — key accepted 2026-04-19
+
+  They connect to this Mac with:
+  ssh -i ~/.killport/id_ed25519 youruser@192.168.1.55
+```
 
 ### Wake on LAN → `killport wol`
 
