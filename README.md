@@ -15,7 +15,7 @@ Also available for [Linux](https://github.com/skosari/killport-linux) and [Windo
 
 AI-powered pentesting, vulnerability scanning, and automated hardening via [Ollama](https://ollama.com) — runs entirely on your hardware
 
-[![Version](https://img.shields.io/badge/version-1.10.13-00b4d8?style=flat-square)](#)
+[![Version](https://img.shields.io/badge/version-1.10.14-00b4d8?style=flat-square)](#)
 [![Platform](https://img.shields.io/badge/platform-macOS-00b4d8?style=flat-square&logo=apple&logoColor=white)](#)
 [![Shell](https://img.shields.io/badge/shell-bash-00b4d8?style=flat-square&logo=gnubash&logoColor=white)](#)
 [![License](https://img.shields.io/badge/license-Source%20Available-00b4d8?style=flat-square)](LICENSE)
@@ -63,6 +63,7 @@ curl -fsSL https://raw.githubusercontent.com/skosari/killport-mac/main/killport 
 | `killport ports` | Inspect all ports with live firewall status |
 | `killport status <port>` | Show if a port is open or closed |
 | `killport ip` | Show IP addresses, DNS, and network info |
+| `killport scan` | Scan local network for all active computers |
 | `killport scan <ip>` | Scan ports on a remote host (no AI) |
 | `killport scan <ip> all` | Scan all 65535 ports on a remote host |
 | `killport watch <port>` | Monitor live connections to a local port |
