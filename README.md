@@ -15,7 +15,7 @@ Also available for [Linux](https://github.com/skosari/killport-linux) and [Windo
 
 AI-powered pentesting, vulnerability scanning, and automated hardening via [Ollama](https://ollama.com) — runs entirely on your hardware
 
-[![Version](https://img.shields.io/badge/version-1.10.10-00b4d8?style=flat-square)](#)
+[![Version](https://img.shields.io/badge/version-1.10.11-00b4d8?style=flat-square)](#)
 [![Platform](https://img.shields.io/badge/platform-macOS-00b4d8?style=flat-square&logo=apple&logoColor=white)](#)
 [![Shell](https://img.shields.io/badge/shell-bash-00b4d8?style=flat-square&logo=gnubash&logoColor=white)](#)
 [![License](https://img.shields.io/badge/license-Source%20Available-00b4d8?style=flat-square)](LICENSE)

@@ -2,7 +2,7 @@
 
 set -euo pipefail
 
-VERSION="1.10.10"
+VERSION="1.10.11"
 REPO="skosari/killport-mac"
 RAW="https://raw.githubusercontent.com/${REPO}/main"
 API="https://api.github.com/repos/${REPO}/contents"
@@ -2504,7 +2504,7 @@ wol_dispatch() {
         printf "  ${D}None. Use 'killport wol save <name> <mac> [ip]' to add one.${R}\n\n"
         return
       fi
-      for entry in "${WOL_SAVED[@]}"; do
+      for entry in "${WOL_SAVED[@]+"${WOL_SAVED[@]}"}"; do
         local n m i
         n=$(printf '%s' "$entry" | awk '{print $1}')
         m=$(printf '%s' "$entry" | awk '{print $2}')
@@ -2526,7 +2526,7 @@ wol_dispatch() {
       local _wol_count=0
 
       # Print saved hosts immediately (numbered, with ★)
-      for entry in "${WOL_SAVED[@]}"; do
+      for entry in "${WOL_SAVED[@]+"${WOL_SAVED[@]}"}"; do
         local sn sm si
         sn=$(printf '%s' "$entry" | awk '{print $1}')
         sm=$(printf '%s' "$entry" | awk '{print $2}')
@@ -2612,7 +2612,7 @@ wol_dispatch() {
     *)
       wol_load_hosts
       local found_mac="" found_ip=""
-      for entry in "${WOL_SAVED[@]}"; do
+      for entry in "${WOL_SAVED[@]+"${WOL_SAVED[@]}"}"; do
         local n m i
         n=$(printf '%s' "$entry" | awk '{print $1}')
         m=$(printf '%s' "$entry" | awk '{print $2}')
