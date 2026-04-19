@@ -2,7 +2,7 @@
 
 set -euo pipefail
 
-VERSION="1.10.29"
+VERSION="1.10.30"
 REPO="skosari/killport-mac"
 RAW="https://raw.githubusercontent.com/${REPO}/main"
 API="https://api.github.com/repos/${REPO}/contents"
@@ -3069,13 +3069,13 @@ shutdown_dispatch() {
     printf "  ${D}Scanning %s...${R}\n\n" "$NET_SCAN_BASE"
     local _tmpdir; _tmpdir=$(mktemp -d)
     for i in $(seq 1 254); do
-      ( ping -c1 -W500 "${NET_SCAN_BASE}.${i}" &>/dev/null || true; touch "$_tmpdir/$i" ) &
+      ( ping -c1 -W500 "${NET_SCAN_BASE}.${i}" &>/dev/null && touch "$_tmpdir/$i" ) &
     done
     wait
     local -a _hosts=()
     local _count=0
     for i in $(seq 1 254); do
-      if [ -f "$_tmpdir/$i" ] && arp -n "${NET_SCAN_BASE}.${i}" 2>/dev/null | grep -q ':'; then
+      if [ -f "$_tmpdir/$i" ]; then
         (( _count++ )) || true
         _hosts+=("${NET_SCAN_BASE}.${i}")
         printf "  ${B}%2d${R}  ${D}%-18s${R}\n" "$_count" "${NET_SCAN_BASE}.${i}"
