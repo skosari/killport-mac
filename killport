@@ -2564,12 +2564,12 @@ wol_dispatch() {
   case "$subcmd" in
     save)
       local name="${2:-}" mac="${3:-}" ip="${4:-}"
-      [ -z "$name" ] || [ -z "$mac" ] && { printf "  Usage: killport wol save <name> <mac> [ip]\n"; exit 1; }
+      [ -z "$name" ] || [ -z "$mac" ] && { printf "  Usage:  save <name> <mac> [ip]\n"; exit 1; }
       wol_save_host "$name" "$mac" "$ip" && printf "  ${G}Saved:${R} %s  %s\n\n" "$name" "$mac"
       ;;
     delete|remove)
       local name="${2:-}"
-      [ -z "$name" ] && { printf "  Usage: killport wol delete <name>\n"; exit 1; }
+      [ -z "$name" ] && { printf "  Usage:  delete <name>\n"; exit 1; }
       if [ -f "$WOL_HOSTS" ]; then
         local tmp; tmp=$(grep -v "^${name} " "$WOL_HOSTS" 2>/dev/null || true)
         printf '%s\n' "$tmp" > "$WOL_HOSTS"
@@ -2583,7 +2583,7 @@ wol_dispatch() {
       printf "\n${B}${C}  Saved WoL Hosts${R}\n"
       printf "${C}  ────────────────────────────────────────────${R}\n\n"
       if [ "${#WOL_SAVED[@]}" -eq 0 ]; then
-        printf "  ${D}None. Use 'killport wol save <name> <mac> [ip]' to add one.${R}\n\n"
+        printf "  ${D}None. Use ' save <name> <mac> [ip]' to add one.${R}\n\n"
         return
       fi
       for entry in "${WOL_SAVED[@]+"${WOL_SAVED[@]}"}"; do
@@ -2684,7 +2684,7 @@ wol_dispatch() {
 
       if [ "${#_entries[@]}" -eq 0 ]; then
         printf "  ${Y}No hosts found.${R}\n\n"
-        printf "  ${D}Add a known host:  killport wol save <name> <mac> [ip]${R}\n\n"
+        printf "  ${D}Add a known host:   save <name> <mac> [ip]${R}\n\n"
         return
       fi
 
@@ -2752,9 +2752,9 @@ wol_dispatch() {
       fi
       printf "  No saved host named '%s'.\n" "$subcmd"
       printf "  Usage:\n"
-      printf "    killport wol              scan network + pick a host to wake\n"
-      printf "    killport wol <name>       wake a saved host by name\n"
-      printf "    killport wol <mac>        wake by MAC address directly\n"
+      printf "                  scan network + pick a host to wake\n"
+      printf "     <name>       wake a saved host by name\n"
+      printf "     <mac>        wake by MAC address directly\n"
       printf "    killport wol save <name> <mac> [ip]\n"
       printf "    killport wol delete <name>\n"
       printf "    killport wol list\n\n"
@@ -2777,6 +2777,7 @@ if [ $# -eq 0 ]; then
   echo ""
   echo "  killport                   show this help"
   echo "  killport <port>            kill whatever is running on that port"
+  echo "  killport config            configure Ollama host and model"
   echo "  killport list              list all listening ports"
   echo "  killport open <port>       open a port to external connections"
   echo "  killport close <port>      close a port from external connections"
@@ -2800,10 +2801,9 @@ if [ $# -eq 0 ]; then
   echo "  killport forward <p> <h:p> forward a local port to a remote host:port"
   echo "  killport attack <ip>       AI pentest: scan all ports + analysis  (requires Ollama)"
   echo "  killport attack <ip>:port  AI pentest: scan single port + analysis  (requires Ollama)"
-  echo "  killport config            configure Ollama host and model"
   echo "  killport attack log        view attack history"
   echo "  killport stress <ip:port>  authorized connection flood / stress test"
-  echo "  killport wol               wake a LAN computer (scan network or use saved hosts)"
+  echo "  killport wol               scan network and wake or save host"
   echo "  killport wol <name>        wake a saved host by name"
   echo "  killport wol save <n> <mac> [ip]  save a host for quick wake"
   echo "  killport wol list          show saved WoL hosts"
