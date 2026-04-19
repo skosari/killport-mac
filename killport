@@ -2,7 +2,7 @@
 
 set -euo pipefail
 
-VERSION="1.10.18"
+VERSION="1.10.19"
 REPO="skosari/killport-mac"
 RAW="https://raw.githubusercontent.com/${REPO}/main"
 API="https://api.github.com/repos/${REPO}/contents"
@@ -2494,9 +2494,8 @@ _net_progress_bar() {
 net_scan_hosts() {
   # Scans local /24. Prints progress bar + hosts as found.
   # Populates NET_SCAN_HOSTS. Accepts optional list of IPs to skip.
-  # Usage: net_scan_hosts [skip_ip1 skip_ip2 ...]
-  # Note: avoids arp -a (hangs with many incomplete entries on macOS).
-  # Uses ping exit code to detect UP hosts, then arp -n <ip> per host for MAC.
+  # Subshells only ping (triggers ARP) and mark done. Main loop does arp -n
+  # per completed ping — gives ARP cache time to settle, catches ICMP-blocked hosts.
   local G=$'\033[0;32m' D=$'\033[2m' R=$'\033[0m' Y=$'\033[0;33m'
 
   _net_detect_base || {
@@ -2508,51 +2507,47 @@ net_scan_hosts() {
 
   local _tmpdir
   _tmpdir=$(mktemp -d)
-  mkdir "$_tmpdir/done" "$_tmpdir/up" "$_tmpdir/proc"
+  mkdir "$_tmpdir/done" "$_tmpdir/proc"
   local _total=254
 
   for i in $(seq 1 254); do
     ( ping -c1 -W500 "${NET_SCAN_BASE}.${i}" &>/dev/null || true
-      # ARP check catches hosts that block ICMP (e.g. Windows firewall)
-      arp -n "${NET_SCAN_BASE}.${i}" 2>/dev/null | grep -qv "no entry" \
-        && touch "$_tmpdir/up/$i" || true
       touch "$_tmpdir/done/$i" ) &
   done
 
   local -a _shown=("$@")
-  local _found=0 _done=0 _f _i _ip _mac _arp_line
+  local _found=0 _total_done=0 _f _i _ip _mac _arp_line
 
   _net_progress_bar 0 "$_total" 0
 
   while true; do
-    _done=$(ls -1 "$_tmpdir/done" 2>/dev/null | wc -l | tr -d ' ')
-
-    # Process each newly found UP host
-    for _f in "$_tmpdir/up/"*; do
+    # Move each completed ping into proc/ and check its ARP entry
+    for _f in "$_tmpdir/done/"*; do
       [ -f "$_f" ] || continue
       mv "$_f" "$_tmpdir/proc/" 2>/dev/null || continue
+      _total_done=$(( _total_done + 1 ))
       _i=$(basename "$_f")
       _ip="${NET_SCAN_BASE}.${_i}"
 
-      # Skip if caller asked us to
       _skip=0
       for _sm in "${_shown[@]+"${_shown[@]}"}"; do [ "$_sm" = "$_ip" ] && _skip=1; done
       [ "$_skip" -eq 1 ] && continue
 
-      # Get MAC via single-IP arp (fast, no table scan)
+      # ARP entry present = host is up (works even if ICMP blocked, e.g. Windows)
       _arp_line=$(arp -n "$_ip" 2>/dev/null || true)
       _mac=$(printf '%s' "$_arp_line" | grep -oE '([0-9a-f]{1,2}:){5}[0-9a-f]{1,2}' | head -1)
-      [ -n "$_mac" ] && _mac=$(_mac_norm "$_mac") || _mac="??"
+      [ -z "$_mac" ] && continue
 
+      _mac=$(_mac_norm "$_mac")
       (( _found++ )) || true
       _shown+=("$_ip")
       NET_SCAN_HOSTS+=("? ${_ip} ${_mac}")
       printf "\r\033[2K  ${G}%-30s${R}  %-15s  ${D}%s${R}\n" "?" "$_ip" "$_mac"
-      _net_progress_bar "$_done" "$_total" "$_found"
+      _net_progress_bar "$_total_done" "$_total" "$_found"
     done
 
-    _net_progress_bar "$_done" "$_total" "$_found"
-    [ "$_done" -ge "$_total" ] && break
+    _net_progress_bar "$_total_done" "$_total" "$_found"
+    [ "$_total_done" -ge "$_total" ] && break
     sleep 0.1
   done
 
@@ -2629,48 +2624,45 @@ wol_dispatch() {
 
       local _tmpdir
       _tmpdir=$(mktemp -d)
-      mkdir "$_tmpdir/done" "$_tmpdir/up" "$_tmpdir/proc"
+      mkdir "$_tmpdir/done" "$_tmpdir/proc"
       local _total=254
       NET_SCAN_HOSTS=()
 
       for i in $(seq 1 254); do
         ( ping -c1 -W500 "${NET_SCAN_BASE}.${i}" &>/dev/null || true
-          arp -n "${NET_SCAN_BASE}.${i}" 2>/dev/null | grep -qv "no entry" \
-            && touch "$_tmpdir/up/$i" || true
           touch "$_tmpdir/done/$i" ) &
       done
 
-      local _found=0 _done=0 _f _i _ip _mac _arp_line _early=""
+      local _found=0 _total_done=0 _f _i _ip _mac _arp_line _early=""
 
       _net_progress_bar 0 "$_total" "$_count"
 
       while true; do
-        _done=$(ls -1 "$_tmpdir/done" 2>/dev/null | wc -l | tr -d ' ')
-
-        for _f in "$_tmpdir/up/"*; do
+        for _f in "$_tmpdir/done/"*; do
           [ -f "$_f" ] || continue
           mv "$_f" "$_tmpdir/proc/" 2>/dev/null || continue
+          _total_done=$(( _total_done + 1 ))
           _i=$(basename "$_f")
           _ip="${NET_SCAN_BASE}.${_i}"
 
-          # Skip IPs already shown (saved hosts)
           _skip=0
           for _sm in "${_skip_macs[@]+"${_skip_macs[@]}"}"; do [ "$_sm" = "$_ip" ] && _skip=1; done
           [ "$_skip" -eq 1 ] && continue
 
           _arp_line=$(arp -n "$_ip" 2>/dev/null || true)
           _mac=$(printf '%s' "$_arp_line" | grep -oE '([0-9a-f]{1,2}:){5}[0-9a-f]{1,2}' | head -1)
-          [ -n "$_mac" ] && _mac=$(_mac_norm "$_mac") || _mac="??"
+          [ -z "$_mac" ] && continue
 
+          _mac=$(_mac_norm "$_mac")
           (( _count++ )) || true; (( _found++ )) || true
           _skip_macs+=("$_ip")
           _entries+=("$_mac|$_ip|?")
           NET_SCAN_HOSTS+=("? ${_ip} ${_mac}")
           printf "\r\033[2K  ${B}%2d${R}  %-30s  %-15s  ${D}%s${R}\n" "$_count" "?" "$_ip" "$_mac"
-          _net_progress_bar "$_done" "$_total" "$_count"
+          _net_progress_bar "$_total_done" "$_total" "$_count"
         done
 
-        _net_progress_bar "$_done" "$_total" "$_count"
+        _net_progress_bar "$_total_done" "$_total" "$_count"
 
         if read -r -t 0 2>/dev/null; then
           IFS= read -r _early 2>/dev/null || true
@@ -2682,7 +2674,7 @@ wol_dispatch() {
           _early=""
         fi
 
-        [ "$_done" -ge "$_total" ] && break
+        [ "$_total_done" -ge "$_total" ] && break
         sleep 0.1
       done
 
