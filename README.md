@@ -9,13 +9,13 @@
 ╚═╝  ╚═╝╚═╝╚══════╝╚══════╝╚═╝      ╚═════╝ ╚═╝  ╚═╝   ╚═╝   
 </pre>
 
-**Kill whatever is running on a port — macOS**
+**Kill ports · manage firewall · SSH easy connect · Wake on LAN · remote shutdown · network scanning — macOS**
 
 Also available for [Linux](https://github.com/skosari/killport-linux) · [Windows](https://github.com/skosari/killport-win) · [Windows CMD](https://github.com/skosari/killport-cmd)
 
 AI-powered pentesting, vulnerability scanning, and automated hardening via [Ollama](https://ollama.com) — runs entirely on your hardware
 
-[![Version](https://img.shields.io/badge/version-1.10.27-00b4d8?style=flat-square)](#)
+[![Version](https://img.shields.io/badge/version-1.10.36-00b4d8?style=flat-square)](#)
 [![Platform](https://img.shields.io/badge/platform-macOS-00b4d8?style=flat-square&logo=apple&logoColor=white)](#)
 [![Shell](https://img.shields.io/badge/shell-bash-00b4d8?style=flat-square&logo=gnubash&logoColor=white)](#)
 [![License](https://img.shields.io/badge/license-Source%20Available-00b4d8?style=flat-square)](LICENSE)
