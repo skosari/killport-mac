@@ -26,19 +26,13 @@ AI-powered pentesting, vulnerability scanning, and automated hardening via [Olla
 
 ## Install
 
-**Option 1 — Homebrew** *(recommended)*
-
-```sh
-brew install skosari/killport-mac/killport
-```
-
-**Option 2 — curl one-liner**
+**Option 1 — curl one-liner**
 
 ```sh
 curl -fsSL https://raw.githubusercontent.com/skosari/killport-mac/main/install.sh | bash
 ```
 
-**Option 3 — Manual**
+**Option 2 — Manual**
 
 ```sh
 sudo mkdir -p /usr/local/bin && \
@@ -721,13 +715,7 @@ killport uninstall
 
 Removes the binary and all pfctl firewall rules created by `killport open`.
 
-**Option 2 — Homebrew**
-
-```sh
-brew uninstall killport && brew untap skosari/killport-mac
-```
-
-**Option 3 — curl**
+**Option 2 — curl**
 
 ```sh
 curl -fsSL https://raw.githubusercontent.com/skosari/killport-mac/main/uninstall.sh | bash

@@ -2,7 +2,7 @@
 
 set -euo pipefail
 
-VERSION="1.10.33"
+VERSION="1.10.34"
 REPO="skosari/killport-mac"
 RAW="https://raw.githubusercontent.com/${REPO}/main"
 API="https://api.github.com/repos/${REPO}/contents"
@@ -3024,6 +3024,8 @@ shutdown_dispatch() {
     printf "  ${Y}SSH key not yet authorized on that machine.${R}\n\n"
     printf "  Run this on ${C}%s${R} (as %s) to authorize this machine:\n\n" "$ip" "$user"
     printf "  ${C}killport ssh ks:%s${R}\n\n" "$our_token"
+    printf "  ${D}If %s is a Windows Administrator, run killport as Administrator${R}\n" "$user"
+    printf "  ${D}so the key is written to administrators_authorized_keys (required by Windows OpenSSH).${R}\n\n"
     printf "  ${D}Press Enter when done...${R}" ; read -r ; printf "\n"
   }
 
