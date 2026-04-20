@@ -2927,7 +2927,14 @@ print(json.dumps({'user': sys.argv[1], 'ip': sys.argv[2], 'pubkey': sys.argv[3]}
       done < "$SSH_KNOWN"
       if [ -n "$found_user" ]; then
         printf "\n  ${D}Connecting to %s (%s@%s)...${R}\n\n" "$subcmd" "$found_user" "$found_ip"
-        exec ssh -i "$KEY_FILE" "${found_user}@${found_ip}"
+        ssh -i "$KEY_FILE" "${found_user}@${found_ip}" || {
+          printf "\n  ${RE}Connection failed.${R}\n\n"
+          printf "  ${Y}If the remote is a Windows machine, run these on it:${R}\n\n"
+          printf "  ${C}    killport open 22${R}\n"
+          printf "  ${C}    Start-Service sshd${R}\n\n"
+          printf "  ${D}(Windows OpenSSH can stop unexpectedly — these reopen the firewall and restart the service.)${R}\n\n"
+        }
+        return
       fi
     fi
     printf "\n  ${RE}No saved connection named '%s'.${R}\n" "$subcmd"
