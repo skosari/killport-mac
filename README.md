@@ -15,7 +15,7 @@ Also available for [Linux](https://github.com/skosari/killport-linux) · [Window
 
 AI-powered pentesting, vulnerability scanning, and automated hardening via [Ollama](https://ollama.com) — runs entirely on your hardware
 
-[![Version](https://img.shields.io/badge/version-1.10.36-00b4d8?style=flat-square)](#)
+[![Version](https://img.shields.io/badge/version-1.10.37-00b4d8?style=flat-square)](#)
 [![Platform](https://img.shields.io/badge/platform-macOS-00b4d8?style=flat-square&logo=apple&logoColor=white)](#)
 [![Shell](https://img.shields.io/badge/shell-bash-00b4d8?style=flat-square&logo=gnubash&logoColor=white)](#)
 [![License](https://img.shields.io/badge/license-Source%20Available-00b4d8?style=flat-square)](LICENSE)
@@ -47,6 +47,7 @@ curl -fsSL https://raw.githubusercontent.com/skosari/killport-mac/main/killport 
 | Command | Description |
 |---|---|
 | `killport` | Show help |
+| `killport setup` | Interactive pro setup wizard (WoL, Ollama, SSH, remote shutdown) |
 | `killport <port>` | Kill whatever is running on that port |
 | `killport attack <ip>` | AI pentest: scan all ports + analysis (requires Ollama) |
 | `killport attack <ip>:<port>` | AI pentest: single port deep dive (requires Ollama) |
@@ -72,6 +73,10 @@ curl -fsSL https://raw.githubusercontent.com/skosari/killport-mac/main/killport 
 | `killport shutdown <ip>` | Send a shutdown signal to a remote machine via SSH |
 | `killport shutdown <name>` | Shut down a saved host by name |
 | `killport shutdown list` | Show all saved shutdown hosts |
+| `killport restart` | Scan network and pick a machine to restart |
+| `killport restart <ip>` | Send a restart signal to a remote machine via SSH |
+| `killport restart <name>` | Restart a saved host by name |
+| `killport restart list` | Show all saved shutdown/restart hosts |
 | `killport sniff <ip:port>` | Capture traffic to/from a specific host:port |
 | `killport sniff <port>` | Capture and display traffic on a port |
 | `killport ssh` | Generate a token so another machine can SSH into this one |
@@ -645,20 +650,25 @@ killport ssh sams-mbp      # print the exact ssh command for that person
   ssh -i ~/.killport/id_ed25519 youruser@192.168.1.55
 ```
 
-### Shutdown → `killport shutdown`
+### Shutdown & Restart → `killport shutdown` / `killport restart`
 
-Send a shutdown signal to any Mac, Linux, or Windows machine on your network over SSH. On first use you'll be asked for the OS and SSH username — save the host by name so you never have to type the IP again.
+Send a shutdown or restart signal to any Mac, Linux, or Windows machine on your network over SSH. On first use you'll be asked for the OS and SSH username — save the host by name so you never have to type the IP again. Hosts are shared between both commands.
 
 ```sh
 killport shutdown                  # scan your /24 subnet and pick a machine
 killport shutdown 192.168.1.50     # shutdown by IP (prompts OS + user, offers to save)
 killport shutdown mini             # shutdown a saved host by name
-killport shutdown list             # show all saved shutdown hosts
+killport shutdown list             # show all saved hosts
+
+killport restart                   # scan network and pick a machine to restart
+killport restart 192.168.1.50      # restart by IP
+killport restart mini              # restart a saved host by name
+killport restart list              # same list as shutdown (shared hosts file)
 ```
 
-With no argument, `killport shutdown` ping-sweeps your local subnet, shows every live host, and lets you pick by number. It then asks for the OS type (mac / linux / windows) and SSH username, sends the shutdown, and offers to save the host for next time.
+With no argument, both commands ping-sweep your local subnet, show every live host, and let you pick by number. They then ask for the OS type (mac / linux / windows) and SSH username, send the command, and offer to save the host for next time.
 
-Supports macOS (`sudo shutdown -h now`), Linux (`sudo shutdown -h now`), and Windows (`shutdown /s /t 0 /f`). Uses the killport SSH key (`~/.killport/id_ed25519`) — set that up first with `killport ssh`.
+Supports macOS (`sudo shutdown -h now` / `sudo shutdown -r now`), Linux (`sudo shutdown -h now` / `sudo shutdown -r now`), and Windows (`shutdown /s /t 0 /f` / `shutdown /r /t 0 /f`). Uses the killport SSH key (`~/.killport/id_ed25519`) — set that up first with `killport ssh`.
 
 ---
 

@@ -2,7 +2,7 @@
 
 set -euo pipefail
 
-VERSION="1.10.36"
+VERSION="1.10.37"
 REPO="skosari/killport-mac"
 RAW="https://raw.githubusercontent.com/${REPO}/main"
 API="https://api.github.com/repos/${REPO}/contents"
@@ -343,15 +343,15 @@ show_ip() {
 
   # Determine the interface used for the default gateway route
   local gw_iface
-  gw_iface=$(netstat -rn 2>/dev/null | awk '/^default/{print $NF; exit}')
+  gw_iface=$(netstat -rn 2>/dev/null | awk '/^default/{print $NF; exit}' || true)
 
   for iface in $(ifconfig -l 2>/dev/null); do
     info=$(ifconfig "$iface" 2>/dev/null)
     mac="";  ipv4="";  ipv6="";  status=""
-    mac=$(printf '%s\n'    "$info" | awk '/ether /{print $2; exit}')
-    ipv4=$(printf '%s\n'   "$info" | awk '/inet /{print $2; exit}')
-    ipv6=$(printf '%s\n'   "$info" | awk '/inet6 / && $2 !~ /%/{print $2; exit}')
-    status=$(printf '%s\n' "$info" | awk '/status:/{print $2; exit}')
+    mac=$(printf '%s\n'    "$info" | awk '/ether /{print $2; exit}' || true)
+    ipv4=$(printf '%s\n'   "$info" | awk '/inet /{print $2; exit}' || true)
+    ipv6=$(printf '%s\n'   "$info" | awk '/inet6 / && $2 !~ /%/{print $2; exit}' || true)
+    status=$(printf '%s\n' "$info" | awk '/status:/{print $2; exit}' || true)
     [ -z "$mac" ] && [ -z "$ipv4" ] && continue
 
     # Reserve the gateway interface as primary; fall back to first active+IPv4
@@ -390,7 +390,7 @@ show_ip() {
   echo ""
   echo "Default Gateway"
   echo "────────────────────────────────────"
-  netstat -rn 2>/dev/null | awk '/^default/{print "  " $2; exit}'
+  netstat -rn 2>/dev/null | awk '/^default/{print "  " $2; exit}' || true
 
   echo ""
   echo "DNS Servers"
@@ -3200,6 +3200,705 @@ shutdown_dispatch() {
   fi
 }
 
+# ── Restart ───────────────────────────────────────────────────────────────────
+
+restart_dispatch() {
+  local C=$'\033[0;36m' G=$'\033[0;32m' Y=$'\033[0;33m' RE=$'\033[0;31m'
+  local D=$'\033[2m' B=$'\033[1m' R=$'\033[0m'
+  local subcmd="${1:-}"
+
+  local KP_DIR="$HOME/.killport"
+  local KEY_FILE="$KP_DIR/id_ed25519"
+  local SD_KNOWN="$KP_DIR/shutdown_hosts"
+
+  _rs_load() {
+    [ -f "$SD_KNOWN" ] || return
+    grep -v '^\s*$\|^#' "$SD_KNOWN" 2>/dev/null || true
+  }
+
+  _rs_save() {
+    local name="$1" os="$2" ip="$3" user="$4"
+    mkdir -p "$KP_DIR"
+    local today; today=$(date +%Y-%m-%d)
+    local tmp=""; [ -f "$SD_KNOWN" ] && tmp=$(grep -v "^${name}|" "$SD_KNOWN" 2>/dev/null || true)
+    printf '%s\n' "$tmp" > "$SD_KNOWN"
+    printf '%s|%s|%s|%s|%s\n' "$name" "$os" "$ip" "$user" "$today" >> "$SD_KNOWN"
+  }
+
+  _rs_ensure_key() {
+    if [ ! -f "$KEY_FILE" ]; then
+      printf "  ${D}No SSH key found — generating one...${R}\n"
+      mkdir -p "$KP_DIR"
+      ssh-keygen -t ed25519 -f "$KEY_FILE" -N "" -C "killport@$(hostname -s 2>/dev/null || echo local)" &>/dev/null
+      printf "  ${G}✓ SSH key created: %s${R}\n\n" "$KEY_FILE"
+    fi
+  }
+
+  _rs_our_ip() {
+    ipconfig getifaddr en0 2>/dev/null \
+      || ipconfig getifaddr en1 2>/dev/null \
+      || ipconfig getifaddr en2 2>/dev/null \
+      || echo "<this-mac-ip>"
+  }
+
+  _rs_show_token() {
+    local ip="$1" user="$2"
+    local pub_file="${KEY_FILE}.pub"
+    local our_user our_ip our_pubkey our_json our_token
+    our_user=$(whoami)
+    our_ip=$(_rs_our_ip)
+    our_pubkey=$(cat "$pub_file")
+    our_json=$(python3 -c "import json,sys; print(json.dumps({'user':sys.argv[1],'ip':sys.argv[2],'pubkey':sys.argv[3]}))" \
+               "$our_user" "$our_ip" "$our_pubkey" 2>/dev/null)
+    our_token=$(printf '%s' "$our_json" | base64 | tr -d '\n')
+    printf "  ${Y}SSH key not yet authorized on that machine.${R}\n\n"
+    printf "  Run this on ${C}%s${R} (as %s) to authorize this machine:\n\n" "$ip" "$user"
+    printf "  ${C}killport ssh ks:%s${R}\n\n" "$our_token"
+    printf "  ${D}Press Enter when done...${R}"; read -r; printf "\n"
+  }
+
+  _rs_host_already_trusted() {
+    local ip="$1" user="$2"
+    local SSH_KNOWN="$KP_DIR/ssh_known"
+    [ -f "$SSH_KNOWN" ] || return 1
+    while IFS='|' read -r _name _u _h _date; do
+      [[ "$_h" == "$ip" && "$_u" == "$user" ]] && return 0
+    done < "$SSH_KNOWN"
+    return 1
+  }
+
+  _rs_do_restart() {
+    local os="$1" ip="$2" user="$3"
+    _rs_ensure_key
+    local cmd
+    case "$os" in
+      mac|linux) cmd="sudo shutdown -r now" ;;
+      windows)   cmd="shutdown /r /t 0 /f" ;;
+    esac
+    printf "  ${D}Sending restart to %s@%s (%s)...${R}\n\n" "$user" "$ip" "$os"
+    local err_file; err_file=$(mktemp)
+    if ! ssh -i "$KEY_FILE" -o ConnectTimeout=5 -o StrictHostKeyChecking=accept-new \
+         -o BatchMode=yes "${user}@${ip}" "$cmd" 2>"$err_file"; then
+      local err; err=$(cat "$err_file")
+      if printf '%s' "$err" | grep -qi "permission denied\|publickey\|authentication failed"; then
+        if _rs_host_already_trusted "$ip" "$user"; then
+          printf "  ${Y}Key auth failed — retrying...${R}\n\n"
+          ssh -i "$KEY_FILE" -o ConnectTimeout=5 -o StrictHostKeyChecking=accept-new \
+            "${user}@${ip}" "$cmd" 2>&1 | sed 's/^/  /' || \
+            printf "  ${RE}Still failed. On the remote, re-run: killport ssh ks:<your-token>${R}\n"
+        else
+          _rs_show_token "$ip" "$user"
+          printf "  ${D}Retrying...${R}\n\n"
+          ssh -i "$KEY_FILE" -o ConnectTimeout=5 -o StrictHostKeyChecking=accept-new \
+            "${user}@${ip}" "$cmd" 2>&1 | sed 's/^/  /' || \
+            printf "  ${RE}Still failed — make sure killport ssh ks:<token> was accepted on the remote.${R}\n"
+        fi
+      else
+        printf '%s\n' "$err" | sed 's/^/  /'
+      fi
+    fi
+    rm -f "$err_file"
+  }
+
+  # ── list ──────────────────────────────────────────────────────────────────
+  if [[ "$subcmd" == "list" ]]; then
+    printf "\n${B}${C}  Restart — Saved Hosts${R}\n"
+    printf "${C}  ────────────────────────────────────────────${R}\n\n"
+    local count=0
+    while IFS='|' read -r name os ip user date; do
+      [[ -z "$name" || "$name" == \#* ]] && continue
+      (( count++ )) || true
+      printf "  ${G}★${R}  ${B}%-20s${R}  ${C}%-8s${R}  ${D}%-16s${R}  %-12s  %s\n" \
+        "$name" "$os" "$ip" "$user" "$date"
+    done < <(_rs_load)
+    if [[ $count -eq 0 ]]; then
+      printf "  ${D}No saved hosts yet.${R}\n"
+      printf "  ${D}Run 'killport shutdown <ip>' or 'killport restart <ip>' to add one.${R}\n"
+    else
+      printf "\n  ${D}%d host(s) — 'killport restart <name>' to restart${R}\n"
+    fi
+    printf "\n"
+    return
+  fi
+
+  # ── name lookup → restart ─────────────────────────────────────────────────
+  if [ -n "$subcmd" ] && [[ "$subcmd" != *"."* ]] && [[ "$subcmd" != *":"* ]]; then
+    local found_os="" found_ip="" found_user=""
+    while IFS='|' read -r name os ip user date; do
+      [[ -z "$name" || "$name" == \#* ]] && continue
+      if [[ "$name" == "$subcmd" ]]; then
+        found_os="$os"; found_ip="$ip"; found_user="$user"; break
+      fi
+    done < <(_rs_load)
+    if [[ -n "$found_ip" ]]; then
+      printf "\n${B}${C}  Restart — %s${R}\n" "$subcmd"
+      printf "${C}  ────────────────────────────────────────────${R}\n\n"
+      _rs_do_restart "$found_os" "$found_ip" "$found_user"
+      printf "\n"
+      return
+    fi
+  fi
+
+  # ── no-arg: scan network and pick ────────────────────────────────────────
+  if [[ -z "$subcmd" ]]; then
+    printf "\n${B}${C}  Restart — Scan Network${R}\n"
+    printf "${C}  ────────────────────────────────────────────${R}\n\n"
+    _net_detect_base 2>/dev/null || { printf "  ${RE}Could not detect local subnet.${R}\n\n"; exit 1; }
+    printf "  ${D}Scanning %s...${R}\n\n" "$NET_SCAN_BASE"
+    local _tmpdir; _tmpdir=$(mktemp -d)
+    for i in $(seq 1 254); do
+      ( ping -c1 -W500 "${NET_SCAN_BASE}.${i}" &>/dev/null || true
+        touch "$_tmpdir/$i" ) &
+    done
+    wait
+    local -a _hosts=()
+    local _count=0
+    for i in $(seq 1 254); do
+      if [ -f "$_tmpdir/$i" ]; then
+        local _ip="${NET_SCAN_BASE}.${i}"
+        local _mac; _mac=$(arp -n "$_ip" 2>/dev/null | grep -oE '([0-9a-f]{1,2}:){5}[0-9a-f]{1,2}' | head -1 || true)
+        [ -z "$_mac" ] && continue
+        (( _count++ )) || true
+        _hosts+=("$_ip")
+        printf "  ${B}%2d${R}  ${D}%-18s${R}\n" "$_count" "$_ip"
+      fi
+    done
+    rm -rf "$_tmpdir"
+    if [[ $_count -eq 0 ]]; then
+      printf "  ${D}No hosts found on %s.${R}\n\n" "$NET_SCAN_BASE"; exit 0
+    fi
+    printf "\n"
+    printf "  ${B}Pick a number (1-%d): ${R}" "$_count"
+    local pick; read -r pick; pick="${pick%$'\r'}"
+    if ! [[ "$pick" =~ ^[0-9]+$ ]] || [[ "$pick" -lt 1 ]] || [[ "$pick" -gt $_count ]]; then
+      printf "  ${RE}Invalid selection.${R}\n\n"; exit 1
+    fi
+    subcmd="${_hosts[$((pick-1))]}"
+    printf "\n"
+  fi
+
+  # ── restart by IP (first time) ────────────────────────────────────────────
+  local ip="$subcmd"
+
+  printf "\n${B}${C}  Restart — %s${R}\n" "$ip"
+  printf "${C}  ────────────────────────────────────────────${R}\n\n"
+
+  printf "  ${B}OS on that machine [mac/linux/windows]: ${R}"
+  local os; read -r os; os="${os%$'\r'}"
+  os=$(printf '%s' "$os" | tr '[:upper:]' '[:lower:]')
+  case "$os" in
+    mac|linux|windows) ;;
+    m) os="mac" ;;
+    l) os="linux" ;;
+    w|win) os="windows" ;;
+    *)
+      printf "  ${RE}Unknown OS '%s'. Use mac, linux, or windows.${R}\n\n" "$os"
+      exit 1
+      ;;
+  esac
+
+  local user=""
+  if [[ "$os" != "windows" ]]; then
+    printf "  ${B}Username on that machine [%s]: ${R}" "$(whoami)"
+    read -r user; user="${user%$'\r'}"
+    [[ -z "$user" ]] && user="$(whoami)"
+  else
+    printf "  ${B}Username on that machine: ${R}"
+    read -r user; user="${user%$'\r'}"
+  fi
+
+  printf "\n"
+  _rs_do_restart "$os" "$ip" "$user"
+  printf "\n"
+
+  printf "  ${D}Save as (leave blank to skip): ${R}"
+  local save_name; read -r save_name; save_name="${save_name%$'\r'}"
+  if [[ -n "$save_name" ]]; then
+    _rs_save "$save_name" "$os" "$ip" "$user"
+    printf "  ${G}✓ Saved as '%s'  —  killport restart %s${R}\n\n" "$save_name" "$save_name"
+  else
+    printf "\n"
+  fi
+}
+
+# ── QR Connect ───────────────────────────────────────────────────────────────
+
+qrconnect_dispatch() {
+  local C=$'\033[0;36m' G=$'\033[0;32m' Y=$'\033[0;33m' RE=$'\033[0;31m'
+  local D=$'\033[2m' B=$'\033[1m' R=$'\033[0m'
+
+  local KP_DIR="$HOME/.killport"
+  local KEY_FILE="$KP_DIR/id_ed25519"
+  local PUB_FILE="$KP_DIR/id_ed25519.pub"
+  local PAIR_PORT=22222
+
+  _qr_our_ip() {
+    ipconfig getifaddr en0 2>/dev/null \
+      || ipconfig getifaddr en1 2>/dev/null \
+      || ipconfig getifaddr en2 2>/dev/null \
+      || echo "127.0.0.1"
+  }
+
+  mkdir -p "$KP_DIR"
+  chmod 700 "$KP_DIR"
+
+  if [ ! -f "$KEY_FILE" ]; then
+    printf "  Generating Ed25519 keypair...\n"
+    ssh-keygen -t ed25519 -f "$KEY_FILE" -N "" -C "killport@$(hostname -s)" -q
+    printf "  ${G}✓ Created SSH key${R}\n\n"
+  fi
+
+  local pubkey local_ip local_user local_host
+  pubkey=$(cat "$PUB_FILE")
+  local_user=$(whoami)
+  local_host=$(hostname -s 2>/dev/null || echo "unknown")
+  local_ip=$(_qr_our_ip)
+
+  # find an open port starting at 22222
+  while lsof -i :"$PAIR_PORT" &>/dev/null 2>&1; do
+    (( PAIR_PORT++ ))
+  done
+
+  local pair_url="killport://pair?v=1&ip=${local_ip}&p=${PAIR_PORT}"
+
+  printf "\n${B}${C}  killport qrconnect${R}\n"
+  printf "${C}  ────────────────────────────────────────────${R}\n\n"
+  printf "  ${D}Machine : %s${R}\n" "$local_host"
+  printf "  ${D}User    : %s${R}\n" "$local_user"
+  printf "  ${D}IP      : %s${R}\n" "$local_ip"
+  printf "  ${D}Port    : %d  ·  Timeout: 60s${R}\n\n" "$PAIR_PORT"
+
+  if command -v qrencode &>/dev/null; then
+    qrencode -t UTF8 -m 2 "$pair_url"
+    printf "\n"
+  else
+    printf "  ${Y}Install qrencode for QR display:${R}  brew install qrencode\n\n"
+    printf "  ${D}Pairing URL (enter manually in app):${R}\n"
+    printf "  ${C}%s${R}\n\n" "$pair_url"
+  fi
+
+  printf "  ${Y}Waiting for killport iPhone app to connect...${R}\n\n"
+
+  local result
+  result=$(python3 - "$PAIR_PORT" "$pubkey" "$local_user" "$local_host" <<'PYEOF'
+import sys, socket, json
+
+port      = int(sys.argv[1])
+pubkey    = sys.argv[2]
+user      = sys.argv[3]
+host      = sys.argv[4]
+
+srv = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
+srv.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEADDR, 1)
+srv.bind(('0.0.0.0', port))
+srv.listen(1)
+srv.settimeout(60)
+
+try:
+    conn, addr = srv.accept()
+    conn.settimeout(10)
+    handshake = json.dumps({
+        'version': 1,
+        'user': user,
+        'host': host,
+        'pubkey': pubkey,
+        'platform': 'mac',
+        'ssh_port': 22
+    })
+    conn.sendall((handshake + '\n').encode())
+    data = b''
+    while b'\n' not in data:
+        chunk = conn.recv(4096)
+        if not chunk:
+            break
+        data += chunk
+    phone = json.loads(data.decode().strip())
+    phone_pubkey = phone.get('pubkey', '')
+    device_name  = phone.get('device', 'iPhone')
+    conn.sendall(b'{"status":"ok"}\n')
+    conn.close()
+    if phone_pubkey:
+        print('OK|' + phone_pubkey + '|' + device_name)
+    else:
+        print('ERROR|no pubkey received')
+except socket.timeout:
+    print('TIMEOUT')
+except Exception as e:
+    print('ERROR|' + str(e))
+finally:
+    srv.close()
+PYEOF
+  )
+
+  if [[ "$result" == OK* ]]; then
+    local phone_pubkey device_name
+    phone_pubkey=$(printf '%s' "$result" | cut -d'|' -f2)
+    device_name=$(printf '%s' "$result" | cut -d'|' -f3)
+
+    mkdir -p "$HOME/.ssh"
+    chmod 700 "$HOME/.ssh"
+    touch "$HOME/.ssh/authorized_keys"
+    chmod 600 "$HOME/.ssh/authorized_keys"
+
+    if grep -qF "$phone_pubkey" "$HOME/.ssh/authorized_keys" 2>/dev/null; then
+      printf "  ${Y}This device is already authorized — no change.${R}\n\n"
+    else
+      printf '\n%s\n' "$phone_pubkey" >> "$HOME/.ssh/authorized_keys"
+      printf "  ${G}✓ Paired with %s${R}\n" "$device_name"
+      printf "  ${G}✓ SSH key added — iPhone can now connect to this machine${R}\n\n"
+    fi
+
+    if ! launchctl list com.openssh.sshd &>/dev/null 2>&1; then
+      printf "  ${Y}⚠  Remote Login appears to be off on this Mac.${R}\n"
+      printf "  ${D}Enable it: System Settings → General → Sharing → Remote Login${R}\n\n"
+    fi
+
+  elif [[ "$result" == TIMEOUT* ]]; then
+    printf "  ${RE}Timed out — no iPhone connected within 60 seconds.${R}\n\n"
+  else
+    local err_msg
+    err_msg=$(printf '%s' "$result" | cut -d'|' -f2-)
+    printf "  ${RE}Pairing failed: %s${R}\n\n" "$err_msg"
+  fi
+}
+
+# ── Setup Wizard ──────────────────────────────────────────────────────────────
+
+setup_wizard() {
+  local C=$'\033[0;36m' G=$'\033[0;32m' Y=$'\033[0;33m' RE=$'\033[0;31m'
+  local D=$'\033[2m' B=$'\033[1m' R=$'\033[0m'
+  stty sane 2>/dev/null || true
+
+  attack_load_conf
+  local SETUP_OLLAMA="$ATTACK_OLLAMA"
+  local SETUP_MODEL="$ATTACK_MODEL"
+  local _ollama_ok=0
+  local _setup_score=0
+  local -a _setup_done=()
+
+  local KP_DIR="$HOME/.killport"
+  local SSH_KNOWN="$KP_DIR/ssh_known"
+  local SD_KNOWN="$KP_DIR/shutdown_hosts"
+  # ── Header ────────────────────────────────────────────────────────────────
+  printf "\n${B}${C}  ╔══════════════════════════════════════════════════════════╗${R}\n"
+  printf "${B}${C}  ║       killport · Pro Setup Wizard                        ║${R}\n"
+  printf "${B}${C}  ╚══════════════════════════════════════════════════════════╝${R}\n\n"
+  printf "  ${D}Sets up your home network power tools in one session:${R}\n"
+  printf "  ${D}Ollama AI  ·  Wake on LAN  ·  SSH keys  ·  Remote Shutdown & Restart${R}\n\n"
+  printf "  ${D}Detects existing config and saved hosts automatically.${R}\n"
+  printf "  ${D}Press Enter to skip any step. Ctrl+C to quit anytime.${R}\n\n"
+  printf "  Press Enter to begin → "; read -r _ </dev/tty
+
+  # ═══════════════════════════════════════════════════════════════════════════
+  # STEP 1 — WAKE ON LAN
+  # ═══════════════════════════════════════════════════════════════════════════
+  printf "\n${B}${C}  ┌─ Step 1 of 4 · Wake on LAN ────────────────────────────────┐${R}\n\n"
+  printf "  ${D}Send a magic packet to wake sleeping machines on your network.${R}\n"
+  printf "  ${D}Requires Wake on LAN enabled in each machine's BIOS / firmware.${R}\n\n"
+
+  wol_load_hosts
+  local _wol_skip=0
+
+  if [ "${#WOL_SAVED[@]}" -gt 0 ]; then
+    printf "  ${G}✓ Saved WoL hosts (${#WOL_SAVED[@]}):${R}\n\n"
+    for _wentry in "${WOL_SAVED[@]}"; do
+      local _wn _wm _wi
+      _wn=$(printf '%s' "$_wentry" | awk '{print $1}')
+      _wm=$(printf '%s' "$_wentry" | awk '{print $2}')
+      _wi=$(printf '%s' "$_wentry" | awk '{print $3}')
+      printf "    ${G}★${R}  ${B}%-20s${R}  %s  ${D}%s${R}\n" "$_wn" "$_wm" "$_wi"
+    done
+    printf "\n"
+    _setup_done+=("WoL · ${#WOL_SAVED[@]} host(s) saved")
+    (( _setup_score++ )) || true
+
+    printf "  Wake a saved host to test? [y/N] → "; read -r _twol </dev/tty
+    if [[ "$_twol" =~ ^[Yy]$ ]]; then
+      printf "  Name → "; read -r _wname </dev/tty; _wname="${_wname%$'\r'}"
+      [ -n "$_wname" ] && wol_dispatch "$_wname"
+    fi
+
+    printf "  Add more WoL hosts? [y/N] → "; read -r _addwol </dev/tty
+    [[ "$_addwol" =~ ^[Yy]$ ]] || _wol_skip=1
+  fi
+
+  if [ "$_wol_skip" -eq 0 ]; then
+    printf "\n  ${B}Scan your network to discover hosts to add? [Y/n]${R} → "; read -r _doscan </dev/tty
+    if [[ ! "$_doscan" =~ ^[Nn]$ ]]; then
+      printf "\n"
+      net_scan_hosts
+      printf "\n"
+      if [ "${#NET_SCAN_HOSTS[@]}" -gt 0 ]; then
+        local _idx=1
+        local -a _sdisplay=()
+        printf "  ${D}Enter numbers to save (space-separated), or Enter to skip:${R}\n\n"
+        for _se in "${NET_SCAN_HOSTS[@]}"; do
+          local _sip _smac
+          _sip=$(printf '%s' "$_se" | awk '{print $2}')
+          _smac=$(printf '%s' "$_se" | awk '{print $3}')
+          printf "    ${B}%2d${R}  %-16s  ${D}%s${R}\n" "$_idx" "$_sip" "$_smac"
+          _sdisplay+=("${_sip}|${_smac}")
+          (( _idx++ )) || true
+        done
+        printf "\n  → "; read -r _picks </dev/tty
+        for _pick in $_picks; do
+          if [[ "$_pick" =~ ^[0-9]+$ ]] && [ "$_pick" -ge 1 ] && [ "$_pick" -le "${#_sdisplay[@]}" ]; then
+            local _se="${_sdisplay[$(( _pick - 1 ))]}"
+            local _sip; _sip=$(printf '%s' "$_se" | cut -d'|' -f1)
+            local _smac; _smac=$(printf '%s' "$_se" | cut -d'|' -f2)
+            printf "  Name for %s → " "$_sip"; read -r _sname </dev/tty; _sname="${_sname%$'\r'}"
+            [ -z "$_sname" ] && _sname="host-$(printf '%s' "$_sip" | awk -F. '{print $NF}')"
+            wol_save_host "$_sname" "$_smac" "$_sip"
+            printf "  ${G}✓ Saved: %s  %s  %s${R}\n" "$_sname" "$_smac" "$_sip"
+            _setup_done+=("WoL · saved ${_sname} (${_sip})")
+            (( _setup_score++ )) || true
+            printf "  Test wake now? [y/N] → "; read -r _twake </dev/tty
+            if [[ "$_twake" =~ ^[Yy]$ ]]; then
+              printf "  ${D}Sending magic packet to %s (%s)...${R}\n" "$_sname" "$_smac"
+              if wol_send "$_smac" "$_sip" 2>/dev/null | grep -q ok; then
+                printf "  ${G}✓ Magic packet sent.${R}  ${D}Machine should wake in ~30 seconds.${R}\n\n"
+              else
+                printf "  ${RE}✗ Failed to send packet.${R}\n\n"
+              fi
+            fi
+          fi
+        done
+      else
+        printf "  ${D}No new hosts found. Add manually: killport wol save <name> <mac> [ip]${R}\n\n"
+      fi
+    else
+      printf "  ${D}Add manually: killport wol save <name> <mac> [ip]${R}\n\n"
+    fi
+  fi
+
+  # ═══════════════════════════════════════════════════════════════════════════
+  # STEP 2 — OLLAMA
+  # ═══════════════════════════════════════════════════════════════════════════
+  printf "\n${B}${C}  ┌─ Step 2 of 4 · Ollama AI ──────────────────────────────────┐${R}\n\n"
+  printf "  ${D}Ollama runs AI models locally. killport uses it for pentest analysis,${R}\n"
+  printf "  ${D}fix generation, and live tips during this wizard.${R}\n\n"
+
+  local _tags_json
+  _tags_json=$(curl -sf --max-time 4 "http://${SETUP_OLLAMA}/api/tags" 2>/dev/null || true)
+
+  if [ -n "$_tags_json" ]; then
+    _ollama_ok=1
+    local -a _model_names=()
+    while IFS= read -r _mn; do [ -n "$_mn" ] && _model_names+=("$_mn"); done \
+      < <(printf '%s' "$_tags_json" | python3 -c "
+import json,sys
+for m in json.load(sys.stdin).get('models',[]): print(m['name'])" 2>/dev/null || true)
+    printf "  ${G}✓ Ollama reachable at %s${R}\n" "$SETUP_OLLAMA"
+    if [ "${#_model_names[@]}" -gt 0 ]; then
+      [ -z "$SETUP_MODEL" ] && SETUP_MODEL="${_model_names[0]}"
+      printf "  ${D}Models:  %s${R}\n" "$(IFS=', '; echo "${_model_names[*]}")"
+      printf "  ${D}Active:  %s${R}\n\n" "${SETUP_MODEL:-auto}"
+      _setup_done+=("Ollama · ${SETUP_OLLAMA} · model: ${SETUP_MODEL:-auto}")
+      (( _setup_score++ )) || true
+    else
+      printf "  ${Y}⚠  No models loaded.${R}  ${D}Pull one: ollama pull llama3.2${R}\n\n"
+    fi
+    printf "  Change Ollama host or model? [y/N] → "; read -r _ch </dev/tty
+    if [[ "$_ch" =~ ^[Yy]$ ]]; then
+      attack_config
+      attack_load_conf
+      SETUP_OLLAMA="$ATTACK_OLLAMA"
+      SETUP_MODEL="$ATTACK_MODEL"
+    fi
+  else
+    printf "  ${Y}⚠  Ollama not found at %s${R}\n\n" "$SETUP_OLLAMA"
+    printf "  ${D}a) Install: https://ollama.com  then: ollama serve${R}\n"
+    printf "  ${D}b) Enter a different host (another machine on your LAN)${R}\n"
+    printf "  ${D}c) Press Enter to skip — killport works fine without Ollama${R}\n\n"
+    printf "  Enter Ollama host or press Enter to skip → "; read -r _h </dev/tty
+    _h="${_h%$'\r'}"
+    if [ -n "$_h" ]; then
+      SETUP_OLLAMA="$_h"
+      local _test_json
+      _test_json=$(curl -sf --max-time 4 "http://${SETUP_OLLAMA}/api/tags" 2>/dev/null || true)
+      if [ -n "$_test_json" ]; then
+        ATTACK_OLLAMA="$SETUP_OLLAMA"; attack_save_conf
+        _ollama_ok=1
+        printf "  ${G}✓ Connected and saved.${R}\n\n"
+        _setup_done+=("Ollama · ${SETUP_OLLAMA}")
+        (( _setup_score++ )) || true
+      else
+        printf "  ${RE}✗ Could not reach Ollama at %s — skipping.${R}\n\n" "$SETUP_OLLAMA"
+        SETUP_OLLAMA=""
+      fi
+    else
+      printf "  ${D}Skipped. Configure later: killport config${R}\n\n"
+    fi
+  fi
+
+
+  # ═══════════════════════════════════════════════════════════════════════════
+  # STEP 3 — SSH
+  # ═══════════════════════════════════════════════════════════════════════════
+  printf "\n${B}${C}  ┌─ Step 3 of 4 · SSH Key Exchange ───────────────────────────┐${R}\n\n"
+  printf "  ${D}killport ssh sets up passwordless SSH using Ed25519 keys.${R}\n"
+  printf "  ${D}Works with Mac, Linux, and Windows (OpenSSH). No passwords ever again.${R}\n\n"
+
+  local _ssh_count=0
+  if [ -f "$SSH_KNOWN" ] && [ -s "$SSH_KNOWN" ]; then
+    while IFS='|' read -r _sn _su _si _sd; do
+      [[ -z "$_sn" || "$_sn" == \#* ]] && continue
+      (( _ssh_count++ )) || true
+    done < "$SSH_KNOWN"
+  fi
+  local _ssh_skip=0
+
+  if [ "$_ssh_count" -gt 0 ]; then
+    printf "  ${G}✓ Saved SSH connections ($_ssh_count):${R}\n\n"
+    while IFS='|' read -r _sn _su _si _sd; do
+      [[ -z "$_sn" || "$_sn" == \#* ]] && continue
+      printf "    ${G}★${R}  ${B}%-20s${R}  ${C}%s@%s${R}  ${D}%s${R}\n" "$_sn" "$_su" "$_si" "$_sd"
+    done < "$SSH_KNOWN"
+    printf "\n"
+    _setup_done+=("SSH · ${_ssh_count} connection(s) saved")
+    (( _setup_score++ )) || true
+
+    printf "  Test an SSH connection now? [y/N] → "; read -r _tssh </dev/tty
+    if [[ "$_tssh" =~ ^[Yy]$ ]]; then
+      printf "  Connection name → "; read -r _tname </dev/tty; _tname="${_tname%$'\r'}"
+      [ -n "$_tname" ] && ssh_dispatch "$_tname"
+    fi
+
+    printf "  Add a new SSH connection? [y/N] → "; read -r _newssh </dev/tty
+    [[ "$_newssh" =~ ^[Yy]$ ]] || _ssh_skip=1
+  fi
+
+  if [ "$_ssh_skip" -eq 0 ]; then
+    printf "\n  ${B}Set up SSH to another machine now? [Y/n]${R} → "; read -r _dossh </dev/tty
+    if [[ ! "$_dossh" =~ ^[Nn]$ ]]; then
+      printf "\n"
+      # Show the outgoing token for the other machine to accept
+      ssh_dispatch ""
+      # Wait for the user to complete the exchange: the other machine outputs a
+      # return ks: token which the user pastes back here to save the connection.
+      printf "  ${D}Run that command on the other machine, then paste their return token here.${R}\n"
+      printf "  ${D}(If you're not doing the exchange right now, press Enter to skip.)${R}\n\n"
+      printf "  Return token (ks:...) or Enter to skip → "; read -r _return_token </dev/tty
+      _return_token="${_return_token%$'\r'}"
+      if [[ "$_return_token" == ks:* ]]; then
+        printf "\n"
+        ssh_dispatch "$_return_token"
+      elif [ -n "$_return_token" ]; then
+        printf "  ${Y}Doesn't look like a ks: token — skipping save.${R}\n\n"
+      else
+        printf "  ${D}Skipped. Run 'killport ssh ks:<token>' later to save the connection.${R}\n\n"
+      fi
+      local _new_count=0
+      if [ -f "$SSH_KNOWN" ] && [ -s "$SSH_KNOWN" ]; then
+        while IFS='|' read -r _sn _su _si _sd; do
+          [[ -z "$_sn" || "$_sn" == \#* ]] && continue
+          (( _new_count++ )) || true
+        done < "$SSH_KNOWN"
+      fi
+      if [ "$_new_count" -gt "$_ssh_count" ]; then
+        _setup_done+=("SSH · new connection saved")
+        (( _setup_score++ )) || true
+      fi
+    else
+      printf "  ${D}Set up later: killport ssh${R}\n\n"
+    fi
+  fi
+
+
+  # ═══════════════════════════════════════════════════════════════════════════
+  # STEP 4 — SHUTDOWN / RESTART
+  # ═══════════════════════════════════════════════════════════════════════════
+  printf "\n${B}${C}  ┌─ Step 4 of 4 · Remote Shutdown ────────────────────────────┐${R}\n\n"
+  printf "  ${D}Power off any saved machine with one command.${R}\n"
+  printf "  ${D}Uses the SSH key from Step 3. Works on Mac, Linux, and Windows.${R}\n"
+  printf "  ${D}Restart is also available: killport restart${R}\n\n"
+
+  local _sd_count=0
+  if [ -f "$SD_KNOWN" ]; then
+    while IFS='|' read -r _dn _dos _di _du _dd; do
+      [[ -z "$_dn" || "$_dn" == \#* ]] && continue
+      (( _sd_count++ )) || true
+    done < "$SD_KNOWN"
+  fi
+  local _sd_skip=0
+
+  if [ "$_sd_count" -gt 0 ]; then
+    printf "  ${G}✓ Saved shutdown hosts ($_sd_count):${R}\n\n"
+    while IFS='|' read -r _dn _dos _di _du _dd; do
+      [[ -z "$_dn" || "$_dn" == \#* ]] && continue
+      printf "    ${G}★${R}  ${B}%-20s${R}  %-8s  ${C}%s@%s${R}  ${D}%s${R}\n" "$_dn" "$_dos" "$_du" "$_di" "$_dd"
+    done < "$SD_KNOWN"
+    printf "\n"
+    _setup_done+=("Shutdown · ${_sd_count} host(s) saved")
+    (( _setup_score++ )) || true
+
+    printf "  Test a shutdown? ${Y}(will actually power off the machine)${R} [y/N] → "
+    read -r _tsd </dev/tty
+    if [[ "$_tsd" =~ ^[Yy]$ ]]; then
+      shutdown_dispatch "list"
+      printf "  Name to shut down (or Enter to skip) → "; read -r _sdname </dev/tty; _sdname="${_sdname%$'\r'}"
+      if [ -n "$_sdname" ]; then
+        printf "  ${Y}⚠  Really shut down '%s'? [y/N]${R} → " "$_sdname"; read -r _conf </dev/tty
+        [[ "$_conf" =~ ^[Yy]$ ]] && shutdown_dispatch "$_sdname"
+      fi
+    fi
+
+    printf "  Add another shutdown host? [y/N] → "; read -r _addsd </dev/tty
+    [[ "$_addsd" =~ ^[Yy]$ ]] || _sd_skip=1
+  fi
+
+  if [ "$_sd_skip" -eq 0 ]; then
+    printf "\n  ${B}Add a machine for remote shutdown/restart now? [Y/n]${R} → "; read -r _dosd </dev/tty
+    if [[ ! "$_dosd" =~ ^[Nn]$ ]]; then
+      local _sd_before="$_sd_count"
+      shutdown_dispatch ""
+      local _sd_after=0
+      if [ -f "$SD_KNOWN" ]; then
+        while IFS='|' read -r _dn _dos _di _du _dd; do
+          [[ -z "$_dn" || "$_dn" == \#* ]] && continue
+          (( _sd_after++ )) || true
+        done < "$SD_KNOWN"
+      fi
+      if [ "$_sd_after" -gt "$_sd_before" ]; then
+        _setup_done+=("Shutdown · new host added")
+        (( _setup_score++ )) || true
+      fi
+    else
+      printf "  ${D}Add later: killport shutdown <ip>${R}\n\n"
+    fi
+  fi
+
+
+  # ═══════════════════════════════════════════════════════════════════════════
+  # SUMMARY
+  # ═══════════════════════════════════════════════════════════════════════════
+  printf "\n${B}${C}  ┌─ Setup Complete ────────────────────────────────────────────┐${R}\n\n"
+
+  if [ "${#_setup_done[@]}" -gt 0 ]; then
+    printf "  ${G}Configured ($_setup_score item(s)):${R}\n\n"
+    for _item in "${_setup_done[@]}"; do
+      printf "    ${G}✓${R}  %s\n" "$_item"
+    done
+    printf "\n"
+  else
+    printf "  ${D}Nothing new configured. Run 'killport setup' anytime to update.${R}\n\n"
+  fi
+
+  printf "  ${D}Quick reference:${R}\n\n"
+  printf "    ${C}killport wol${R}               ${D}wake a saved machine${R}\n"
+  printf "    ${C}killport wol list${R}           ${D}list WoL hosts${R}\n"
+  printf "    ${C}killport ssh${R}                ${D}SSH key exchange${R}\n"
+  printf "    ${C}killport ssh list${R}           ${D}list SSH connections${R}\n"
+  printf "    ${C}killport shutdown${R}           ${D}shut down a machine${R}\n"
+  printf "    ${C}killport shutdown list${R}      ${D}list shutdown hosts${R}\n"
+  printf "    ${C}killport restart${R}            ${D}restart a machine${R}\n"
+  printf "    ${C}killport restart list${R}       ${D}list restart hosts${R}\n"
+  printf "    ${C}killport config${R}             ${D}configure Ollama${R}\n"
+  printf "    ${C}killport setup${R}              ${D}re-run this wizard${R}\n\n"
+
+  printf "  ${G}Done.${R}  ${D}Run 'killport setup' anytime to update your configuration.${R}\n\n"
+}
+
 # -------------------------------------------------------
 
 if [ $# -eq 0 ]; then
@@ -3214,6 +3913,7 @@ if [ $# -eq 0 ]; then
   fi
   echo ""
   echo "  killport                   show this help"
+  echo "  killport setup             interactive pro setup wizard (Ollama, WoL, SSH, shutdown)"
   echo "  killport config            configure Ollama host and model"
   echo "  killport update            update to the latest version"
   echo "  killport uninstall         remove killport and all firewall rules"
@@ -3243,6 +3943,7 @@ if [ $# -eq 0 ]; then
   echo "  killport dns <domain>        DNS recon: A/MX/TXT/NS/AXFR zone transfer test"
   echo ""
   echo "  *** SSH EASY CONNECT ***"
+  echo "  killport qrconnect         show QR code — scan with iPhone app to pair"
   echo "  killport ssh               generate a token so another Mac can SSH in"
   echo "  killport ssh ks:<token>    accept a token — adds their key, enables SSH"
   echo "  killport ssh list          show all saved SSH connections"
@@ -3254,11 +3955,15 @@ if [ $# -eq 0 ]; then
   echo "  killport wol save <n> <mac> [ip]  save a host for quick wake"
   echo "  killport wol list          show saved WoL hosts"
   echo ""
-  echo "  *** SHUTDOWN ***"
+  echo "  *** SHUTDOWN & RESTART ***"
   echo "  killport shutdown          scan network and pick a machine to shut down"
   echo "  killport shutdown <ip>     shut down a remote machine via SSH"
   echo "  killport shutdown <name>   shut down a saved host by name"
   echo "  killport shutdown list     show all saved shutdown hosts"
+  echo "  killport restart           scan network and pick a machine to restart"
+  echo "  killport restart <ip>      restart a remote machine via SSH"
+  echo "  killport restart <name>    restart a saved host by name"
+  echo "  killport restart list      show all saved restart hosts"
   echo ""
   echo "  *** TRAFFIC MONITORING ***"
   echo "  killport watch <port>        Monitor live connections to a local port"
@@ -3280,6 +3985,10 @@ if [ $# -eq 0 ]; then
 fi
 
 case "$1" in
+
+  setup)
+    setup_wizard
+    ;;
 
   scan)
     scan_run "${2:-}" "${3:-}"
@@ -3331,6 +4040,14 @@ case "$1" in
 
   shutdown)
     shutdown_dispatch "${2:-}"
+    ;;
+
+  restart)
+    restart_dispatch "${2:-}"
+    ;;
+
+  qrconnect)
+    qrconnect_dispatch
     ;;
 
   ssh)
