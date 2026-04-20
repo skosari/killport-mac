@@ -2,7 +2,7 @@
 
 set -euo pipefail
 
-VERSION="1.10.34"
+VERSION="1.10.35"
 REPO="skosari/killport-mac"
 RAW="https://raw.githubusercontent.com/${REPO}/main"
 API="https://api.github.com/repos/${REPO}/contents"
@@ -2931,8 +2931,9 @@ print(json.dumps({'user': sys.argv[1], 'ip': sys.argv[2], 'pubkey': sys.argv[3]}
           printf "\n  ${RE}Connection failed.${R}\n\n"
           printf "  ${Y}If the remote is a Windows machine, run these on it:${R}\n\n"
           printf "  ${C}    killport open 22${R}\n"
-          printf "  ${C}    Start-Service sshd${R}\n\n"
-          printf "  ${D}(Windows OpenSSH can stop unexpectedly — these reopen the firewall and restart the service.)${R}\n\n"
+          printf "  ${C}    Start-Service sshd${R}\n"
+          printf "  ${C}    Set-Service -Name sshd -StartupType 'Automatic'${R}\n\n"
+          printf "  ${D}(Windows OpenSSH can stop unexpectedly — these reopen the firewall, restart the service, and enable auto-start.)${R}\n\n"
         }
         return
       fi
