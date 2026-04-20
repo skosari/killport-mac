@@ -2,7 +2,7 @@
 
 set -euo pipefail
 
-VERSION="1.10.35"
+VERSION="1.10.36"
 REPO="skosari/killport-mac"
 RAW="https://raw.githubusercontent.com/${REPO}/main"
 API="https://api.github.com/repos/${REPO}/contents"
@@ -3030,6 +3030,17 @@ shutdown_dispatch() {
     printf "  ${D}Press Enter when done...${R}" ; read -r ; printf "\n"
   }
 
+  _sd_host_already_trusted() {
+    local ip="$1" user="$2"
+    local SSH_KNOWN="$KP_DIR/ssh_known"
+    [ -f "$SSH_KNOWN" ] || return 1
+    # ssh_known format: name|user|ip|date
+    while IFS='|' read -r _name _u _h _date; do
+      [[ "$_h" == "$ip" && "$_u" == "$user" ]] && return 0
+    done < "$SSH_KNOWN"
+    return 1
+  }
+
   _sd_do_shutdown() {
     local os="$1" ip="$2" user="$3"
     _sd_ensure_key
@@ -3044,11 +3055,19 @@ shutdown_dispatch() {
          -o BatchMode=yes "${user}@${ip}" "$cmd" 2>"$err_file"; then
       local err; err=$(cat "$err_file")
       if printf '%s' "$err" | grep -qi "permission denied\|publickey\|authentication failed"; then
-        _sd_show_token "$ip" "$user"
-        printf "  ${D}Retrying...${R}\n\n"
-        ssh -i "$KEY_FILE" -o ConnectTimeout=5 -o StrictHostKeyChecking=accept-new \
-          "${user}@${ip}" "$cmd" 2>&1 | sed 's/^/  /' || \
-          printf "  ${RE}Still failed — make sure killport ssh ks:<token> was accepted on the remote.${R}\n"
+        if _sd_host_already_trusted "$ip" "$user"; then
+          # Key exchange was already done — retry directly without the token dance
+          printf "  ${Y}Key auth failed — retrying...${R}\n\n"
+          ssh -i "$KEY_FILE" -o ConnectTimeout=5 -o StrictHostKeyChecking=accept-new \
+            "${user}@${ip}" "$cmd" 2>&1 | sed 's/^/  /' || \
+            printf "  ${RE}Still failed. On the remote, re-run: killport ssh ks:<your-token>${R}\n"
+        else
+          _sd_show_token "$ip" "$user"
+          printf "  ${D}Retrying...${R}\n\n"
+          ssh -i "$KEY_FILE" -o ConnectTimeout=5 -o StrictHostKeyChecking=accept-new \
+            "${user}@${ip}" "$cmd" 2>&1 | sed 's/^/  /' || \
+            printf "  ${RE}Still failed — make sure killport ssh ks:<token> was accepted on the remote.${R}\n"
+        fi
       else
         printf '%s\n' "$err" | sed 's/^/  /'
       fi
