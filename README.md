@@ -77,6 +77,7 @@ curl -fsSL https://raw.githubusercontent.com/skosari/killport-mac/main/killport 
 | `killport shutdown <ip>` | Send a shutdown signal to a remote machine via SSH |
 | `killport shutdown <name>` | Shut down a saved host by name |
 | `killport shutdown list` | Show all saved shutdown hosts |
+| `killport shutdown delete <name>` | Remove a saved shutdown host |
 | `killport restart` | Scan network and pick a machine to restart |
 | `killport restart <ip>` | Send a restart signal to a remote machine via SSH |
 | `killport restart <name>` | Restart a saved host by name |
@@ -87,6 +88,7 @@ curl -fsSL https://raw.githubusercontent.com/skosari/killport-mac/main/killport 
 | `killport ssh <name>` | SSH to a saved connection using your key |
 | `killport ssh ks:<token>` | Accept a token — adds their key and enables SSH access |
 | `killport ssh list` | Show all saved SSH connections |
+| `killport ssh delete <name>` | Remove a saved SSH connection |
 | `killport status <port>` | Show if a port is open or closed |
 | `killport stress <ip:port>` | Authorized connection flood / stress test |
 | `killport uninstall` | Remove killport and all firewall rules |
@@ -97,6 +99,7 @@ curl -fsSL https://raw.githubusercontent.com/skosari/killport-mac/main/killport 
 | `killport wol <name>` | Wake a saved host by name |
 | `killport wol list` | Show all saved WoL hosts |
 | `killport wol save <name> <mac> [ip]` | Save a host for quick wake |
+| `killport wol delete <name>` | Remove a saved WoL host |
 
 ---
 
@@ -640,8 +643,9 @@ The token is self-contained — it encodes your public key, username, and IP as 
 **After accepting, the connection is saved by name.** Look it up any time without memorising IPs:
 
 ```sh
-killport ssh list          # see all saved connections
-killport ssh sams-mbp      # print the exact ssh command for that person
+killport ssh list                  # see all saved connections
+killport ssh sams-mbp              # connect using saved key
+killport ssh delete sams-mbp       # remove a saved connection
 ```
 
 ```
@@ -663,6 +667,7 @@ killport shutdown                  # scan your /24 subnet and pick a machine
 killport shutdown 192.168.1.50     # shutdown by IP (prompts OS + user, offers to save)
 killport shutdown mini             # shutdown a saved host by name
 killport shutdown list             # show all saved hosts
+killport shutdown delete mini      # remove a saved host
 
 killport restart                   # scan network and pick a machine to restart
 killport restart 192.168.1.50      # restart by IP

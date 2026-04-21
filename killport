@@ -2,7 +2,7 @@
 
 set -euo pipefail
 
-VERSION="1.10.40"
+VERSION="1.10.41"
 REPO="skosari/killport-mac"
 RAW="https://raw.githubusercontent.com/${REPO}/main"
 API="https://api.github.com/repos/${REPO}/contents"
@@ -2657,7 +2657,7 @@ wol_dispatch() {
         i=$(printf '%s' "$entry" | awk '{print $3}')
         printf "  ${G}★${R}  ${B}%-20s${R}  %s  ${D}%s${R}\n" "$n" "$m" "$i"
       done
-      printf "\n"
+      printf "\n  ${D}To remove: killport wol delete <name>${R}\n\n"
       ;;
     ""|scan)
       stty sane 2>/dev/null || true
@@ -2860,7 +2860,27 @@ ssh_dispatch() {
       printf "  ${G}★${R}  ${B}%-20s${R}  ${C}%-14s${R}  ${D}%-16s${R}  %s\n" \
         "$name" "$ruser" "$rip" "$rdate"
     done < "$SSH_KNOWN"
-    printf "\n  ${D}%d connection(s) — 'killport ssh <name>' for the connect command${R}\n\n" "$count"
+    printf "\n  ${D}%d connection(s)  ·  'killport ssh <name>' to connect  ·  'killport ssh delete <name>' to remove${R}\n\n" "$count"
+    return
+  fi
+
+  # ── delete mode ──────────────────────────────────────────────────────────
+  if [[ "$subcmd" == "delete" || "$subcmd" == "remove" ]]; then
+    local name="${2:-}"
+    if [ -z "$name" ]; then
+      printf "\n  ${RE}Usage: killport ssh delete <name>${R}\n\n"; exit 1
+    fi
+    if [ -f "$SSH_KNOWN" ]; then
+      if grep -q "^${name}|" "$SSH_KNOWN" 2>/dev/null; then
+        local tmp; tmp=$(grep -v "^${name}|" "$SSH_KNOWN" 2>/dev/null || true)
+        printf '%s\n' "$tmp" > "$SSH_KNOWN"
+        printf "\n  ${G}Removed:${R} %s\n\n" "$name"
+      else
+        printf "\n  ${Y}No saved connection named '%s'.${R}\n\n" "$name"
+      fi
+    else
+      printf "\n  ${Y}No saved connections file found.${R}\n\n"
+    fi
     return
   fi
 
@@ -3122,9 +3142,29 @@ shutdown_dispatch() {
       printf "  ${D}No saved hosts yet.${R}\n"
       printf "  ${D}Run 'killport shutdown <ip>' to add one.${R}\n"
     else
-      printf "\n  ${D}%d host(s) — 'killport shutdown <name>' to shut down${R}\n"
+      printf "\n  ${D}%d host(s)  ·  'killport shutdown <name>' to shut down  ·  'killport shutdown delete <name>' to remove${R}\n" "$count"
     fi
     printf "\n"
+    return
+  fi
+
+  # ── delete mode ───────────────────────────────────────────────────────────
+  if [[ "$subcmd" == "delete" || "$subcmd" == "remove" ]]; then
+    local name="${2:-}"
+    if [ -z "$name" ]; then
+      printf "\n  ${RE}Usage: killport shutdown delete <name>${R}\n\n"; exit 1
+    fi
+    if [ -f "$SD_KNOWN" ]; then
+      if grep -q "^${name}|" "$SD_KNOWN" 2>/dev/null; then
+        local tmp; tmp=$(grep -v "^${name}|" "$SD_KNOWN" 2>/dev/null || true)
+        printf '%s\n' "$tmp" > "$SD_KNOWN"
+        printf "\n  ${G}Removed:${R} %s\n\n" "$name"
+      else
+        printf "\n  ${Y}No saved host named '%s'.${R}\n\n" "$name"
+      fi
+    else
+      printf "\n  ${Y}No saved hosts file found.${R}\n\n"
+    fi
     return
   fi
 
@@ -4306,7 +4346,7 @@ case "$1" in
     ;;
 
   shutdown)
-    shutdown_dispatch "${2:-}"
+    shutdown_dispatch "${2:-}" "${3:-}"
     ;;
 
   restart)
@@ -4322,7 +4362,7 @@ case "$1" in
     ;;
 
   ssh)
-    ssh_dispatch "${2:-}"
+    ssh_dispatch "${2:-}" "${3:-}"
     ;;
 
   wol)
