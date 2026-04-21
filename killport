@@ -2,7 +2,7 @@
 
 set -euo pipefail
 
-VERSION="1.10.46"
+VERSION="1.10.47"
 REPO="skosari/killport-mac"
 RAW="https://raw.githubusercontent.com/${REPO}/main"
 API="https://api.github.com/repos/${REPO}/contents"
@@ -2892,6 +2892,7 @@ ssh_dispatch() {
   local C=$'\033[0;36m' G=$'\033[0;32m' Y=$'\033[0;33m' RE=$'\033[0;31m'
   local D=$'\033[2m' B=$'\033[1m' R=$'\033[0m'
   local subcmd="${1:-}"
+  local arg2="${2:-}"
 
   local KP_DIR="$HOME/.killport"
   local KEY_FILE="$KP_DIR/id_ed25519"
@@ -3019,6 +3020,26 @@ print(json.dumps({'user': sys.argv[1], 'ip': sys.argv[2], 'pubkey': sys.argv[3]}
     return
   fi
 
+  # ── update mode: killport ssh <name> <new_ip> ───────────────────────────
+  if [ -n "$subcmd" ] && [[ "$arg2" =~ ^[0-9]+\.[0-9]+\.[0-9]+\.[0-9]+$ ]]; then
+    if [ ! -f "$SSH_KNOWN" ] || ! grep -q "^${subcmd}|" "$SSH_KNOWN" 2>/dev/null; then
+      printf "\n  ${RE}No saved connection named '%s'.${R}\n" "$subcmd"
+      printf "  ${D}Run 'killport ssh list' to see saved connections.${R}\n\n"
+      exit 1
+    fi
+    local old_ip old_user old_date
+    while IFS='|' read -r name ruser rip rdate; do
+      [[ "$name" == "$subcmd" ]] && { old_user="$ruser"; old_ip="$rip"; old_date="$rdate"; break; }
+    done < "$SSH_KNOWN"
+    local today; today=$(date +%Y-%m-%d)
+    local tmp; tmp=$(grep -v "^${subcmd}|" "$SSH_KNOWN" 2>/dev/null || true)
+    printf '%s\n' "$tmp" > "$SSH_KNOWN"
+    printf '%s|%s|%s|%s\n' "$subcmd" "$old_user" "$arg2" "$today" >> "$SSH_KNOWN"
+    printf "\n  ${G}✓ Updated IP for '%s': %s → %s${R}\n" "$subcmd" "$old_ip" "$arg2"
+    printf "  ${D}Connect with: killport ssh %s${R}\n\n" "$subcmd"
+    return
+  fi
+
   # ── name lookup → connect ────────────────────────────────────────────────
   if [ -n "$subcmd" ]; then
     if [ -f "$SSH_KNOWN" ]; then
@@ -3033,6 +3054,8 @@ print(json.dumps({'user': sys.argv[1], 'ip': sys.argv[2], 'pubkey': sys.argv[3]}
         printf "\n  ${D}Connecting to %s (%s@%s)...${R}\n\n" "$subcmd" "$found_user" "$found_ip"
         ssh -i "$KEY_FILE" "${found_user}@${found_ip}" || {
           printf "\n  ${RE}Connection failed.${R}\n\n"
+          printf "  ${Y}If the IP changed, update it with:${R}\n"
+          printf "  ${C}    killport ssh %s <new-ip>${R}\n\n" "$subcmd"
           printf "  ${Y}If the remote is a Windows machine, run these on it:${R}\n\n"
           printf "  ${C}    killport open 22${R}\n"
           printf "  ${C}    Start-Service sshd${R}\n"
