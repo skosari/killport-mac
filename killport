@@ -2,7 +2,7 @@
 
 set -euo pipefail
 
-VERSION="1.10.39"
+VERSION="1.10.40"
 REPO="skosari/killport-mac"
 RAW="https://raw.githubusercontent.com/${REPO}/main"
 API="https://api.github.com/repos/${REPO}/contents"
@@ -407,6 +407,30 @@ show_ip() {
   fi
 }
 
+# ── Homebrew installer ───────────────────────────────────────────────────────
+
+_ensure_homebrew() {
+  local C=$'\033[0;36m' G=$'\033[0;32m' Y=$'\033[0;33m' RE=$'\033[0;31m'
+  local D=$'\033[2m' B=$'\033[1m' R=$'\033[0m'
+  if command -v brew &>/dev/null; then return 0; fi
+  printf "\n  ${Y}Homebrew is not installed.${R}\n"
+  printf "  ${D}Homebrew is the package manager used to install tools on macOS.${R}\n\n"
+  printf "  Install Homebrew now? [Y/n] → "; read -r _hb </dev/tty
+  if [[ "${_hb:-y}" =~ ^[Yy]$ ]]; then
+    printf "\n"
+    /bin/bash -c "$(curl -fsSL https://raw.githubusercontent.com/Homebrew/install/HEAD/install.sh)"
+    if command -v brew &>/dev/null; then
+      printf "\n  ${G}✓ Homebrew installed.${R}\n\n"; return 0
+    else
+      printf "\n  ${RE}✗ Homebrew install failed. Visit https://brew.sh to install manually.${R}\n\n"
+      return 1
+    fi
+  else
+    printf "  ${D}Install Homebrew from https://brew.sh then re-run this command.${R}\n\n"
+    return 1
+  fi
+}
+
 # ── Attack: AI-powered LAN penetration testing ──────────
 ATTACK_DIR="${HOME}/.config/killport"
 ATTACK_CONF="${ATTACK_DIR}/attack.conf"
@@ -727,16 +751,15 @@ attack_run() {
   _brew_install() {
     local _tool="$1" _desc="$2"
     printf "  ${Y}%s not installed${R} — %s\n" "$_tool" "$_desc"
-    if command -v brew &>/dev/null; then
-      printf "  Install it now with Homebrew? [Y/n] → "
-      read -r _ans
-      if [[ "${_ans:-y}" =~ ^[Yy]$ ]]; then
-        printf "\n"; brew install "$_tool"; printf "\n"
-      else
-        printf "  ${D}Skipping %s (some features will be limited).${R}\n\n" "$_tool"
-      fi
+    if ! command -v brew &>/dev/null; then
+      _ensure_homebrew || return 0
+    fi
+    printf "  Install it now with Homebrew? [Y/n] → "
+    read -r _ans </dev/tty
+    if [[ "${_ans:-y}" =~ ^[Yy]$ ]]; then
+      printf "\n"; brew install "$_tool"; printf "\n"
     else
-      printf "  ${Y}Homebrew not found.${R}  ${D}Install from https://brew.sh  then run: brew install %s${R}\n\n" "$_tool"
+      printf "  ${D}Skipping %s (some features will be limited).${R}\n\n" "$_tool"
     fi
   }
   command -v nmap    &>/dev/null || _brew_install nmap    "needed for port/service scanning"
@@ -4031,6 +4054,9 @@ code_dispatch() {
   # ── install opencode ─────────────────────────────────────────────────────────
   _code_install() {
     printf "\n${B}${C}  Install opencode${R}\n\n"
+    if ! command -v brew &>/dev/null; then
+      _ensure_homebrew || true
+    fi
     if command -v brew &>/dev/null; then
       printf "  ${D}Trying: brew install opencode${R}\n\n"
       brew install opencode && {
