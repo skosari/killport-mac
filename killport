@@ -4152,6 +4152,7 @@ if [ $# -eq 0 ]; then
   echo "  killport ssh ks:<token>    accept a token — adds their key, enables SSH"
   echo "  killport ssh list          show all saved SSH connections"
   echo "  killport ssh <name>        ssh to a saved connection using your key"
+  echo "  killport ssh <name> <ip>   update saved IP (e.g. after DHCP change)"
   echo ""
   echo "  *** WAKE ON LAN ***"
   echo "  killport wol               scan network and wake or save host"
