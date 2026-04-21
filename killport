@@ -2,7 +2,7 @@
 
 set -euo pipefail
 
-VERSION="1.10.42"
+VERSION="1.10.43"
 REPO="skosari/killport-mac"
 RAW="https://raw.githubusercontent.com/${REPO}/main"
 API="https://api.github.com/repos/${REPO}/contents"
@@ -1896,43 +1896,104 @@ audit_firewall() {
   printf "${C}  ────────────────────────────────────────────${R}\n\n"
 
   local rules=""
-  printf "  ${D}Loading firewall rules...${R}\n"
-  rules=$(sudo -p "  Password: " pfctl -sr 2>/dev/null || sudo -p "  Password: " pfctl -s rules 2>/dev/null || true)
-
+  printf "  ${D}Loading firewall rules...${R}"
+  rules=$(sudo -p $'\n  Password: ' pfctl -sr 2>/dev/null || sudo -p $'\n  Password: ' pfctl -s rules 2>/dev/null || true)
   if [ -z "$rules" ]; then
-    printf "  ${Y}No firewall rules found (pfctl returned nothing or insufficient permissions).${R}\n"
-    printf "  ${D}Try: sudo killport audit${R}\n\n"; return 0
+    printf "\r  ${Y}No rules found — try: sudo killport audit${R}\n\n"; return 0
+  fi
+  local total; total=$(echo "$rules" | grep -c . || true)
+  printf "\r  ${D}%d rules loaded.%20s${R}\n" "$total" ""
+
+  # Check if a port is currently listening (bash 3.2 compatible — no assoc arrays)
+  _kp_listening() { netstat -an 2>/dev/null | grep -qE "[.:]${1}[[:space:]].*LISTEN"; }
+
+  # Return service name for a danger port
+  _kp_svcname() {
+    case "$1" in
+      21) echo "FTP" ;; 22) echo "SSH" ;; 23) echo "Telnet" ;; 25) echo "SMTP" ;;
+      53) echo "DNS" ;; 445) echo "SMB" ;; 1433) echo "MSSQL" ;; 3306) echo "MySQL" ;;
+      3389) echo "RDP" ;; 5432) echo "PostgreSQL" ;; 5900) echo "VNC" ;;
+      6379) echo "Redis" ;; 8080) echo "HTTP-Alt" ;; 9200) echo "Elasticsearch" ;;
+      11211) echo "Memcached" ;; 27017) echo "MongoDB" ;; *) echo "" ;;
+    esac
+  }
+
+  local high_count=0 first_high=1 i=0
+  local mediums=""  # newline-delimited: "port|remote|reason|rule"
+
+  while IFS= read -r rule; do
+    [ -z "$rule" ] && continue
+    (( i++ )) || true
+    printf "\r  ${D}Analysing %d / %d ...${R}   " "$i" "$total"
+
+    # Skip pure block/drop rules
+    echo "$rule" | grep -qiE "^block|^drop" && continue
+
+    local is_high=0 is_medium=0 port_info="ALL PORTS" remote_info="Any IP" reason=""
+
+    if echo "$rule" | grep -qiE "^pass" && ! echo "$rule" | grep -qiE "\bport\b"; then
+      # No port restriction — catch-all pass
+      is_high=1
+      reason="Catch-all pass rule — allows ALL traffic from ANY source"
+    else
+      # Check each danger port
+      local dp svc matched=0
+      for dp in 21 22 23 25 53 445 1433 3306 3389 5432 5900 6379 8080 9200 11211 27017; do
+        if echo "$rule" | grep -qiE "^pass" && echo "$rule" | grep -qE "\b${dp}\b" \
+            && echo "$rule" | grep -qiE "from any|any to any"; then
+          svc=$(_kp_svcname "$dp")
+          port_info="$dp ($svc)"
+          local live_note=""
+          _kp_listening "$dp" && live_note=" — CURRENTLY LISTENING"
+          reason="$svc open to any IP$live_note"
+          if _kp_listening "$dp"; then is_high=1; else is_medium=1; fi
+          matched=1; break
+        fi
+      done
+    fi
+
+    if [ "$is_high" -eq 1 ]; then
+      printf "\r%-55s\r\n" ""
+      if [ "$first_high" -eq 1 ]; then
+        printf "\n  ${RE}── HIGH RISK ${R}\n\n"; first_high=0
+      fi
+      printf "  ${RE}✗  %.80s${R}\n" "$rule"
+      printf "     ${D}%-18s${R} %s\n" "Port:" "$port_info"
+      printf "     ${D}%-18s${R} %s\n" "Allowed from:" "$remote_info"
+      printf "     ${Y}→ %s${R}\n\n" "$reason"
+      (( high_count++ )) || true
+    elif [ "$is_medium" -eq 1 ]; then
+      mediums+="${port_info}|${remote_info}|${reason}|${rule}"$'\n'
+    fi
+  done <<< "$rules"
+
+  [ "$high_count" -eq 0 ] && printf "\r  ${D}Analysed %d rules.%30s${R}\n" "$total" ""
+
+  if [ -n "$mediums" ]; then
+    local med_count; med_count=$(echo "$mediums" | grep -c . || true)
+    printf "\n  ${Y}── MEDIUM RISK (%d rules) ${R}\n\n" "$med_count"
+    while IFS='|' read -r p_ rem_ rsn_ rule_; do
+      [ -z "$p_" ] && continue
+      printf "  ${Y}⚠  %.80s${R}\n" "$rule_"
+      printf "     ${D}%-18s${R} %s\n" "Port:" "$p_"
+      printf "     ${D}%-18s${R} %s\n" "Allowed from:" "$rem_"
+      printf "     ${D}→ %s${R}\n\n" "$rsn_"
+    done <<< "$mediums"
   fi
 
-  printf "  ${B}Rules:${R}\n\n"
-  while IFS= read -r line; do [ -n "$line" ] && printf "  ${D}  %s${R}\n" "$line"; done <<< "$rules"
-  printf "\n  ${B}Findings:${R}\n\n"
+  printf "${C}  ────────────────────────────────────────────${R}\n\n"
 
-  local findings=0
-  # Catch-all accept
-  if grep -qiE "^pass (all|in all|out all)" <<< "$rules"; then
-    printf "  ${RE}⚠  Catch-all pass rule — all traffic is allowed by default.${R}\n"; findings=1; fi
-  # Dangerous exposed ports
-  for dp_port in 22 3306 5432 6379 27017 9200 11211; do
-    if grep -qE "\b${dp_port}\b" <<< "$rules"; then
-      local sn=""
-      case "$dp_port" in 22) sn="SSH";; 3306) sn="MySQL";; 5432) sn="PostgreSQL";;
-        6379) sn="Redis";; 27017) sn="MongoDB";; 9200) sn="Elasticsearch";; 11211) sn="Memcached";; esac
-      printf "  ${Y}⚠  Port %s (%s) referenced — confirm it's restricted to trusted IPs.${R}\n" "$dp_port" "$sn"
-      findings=1
-    fi
-  done
-  # Logging
-  if grep -qi "log" <<< "$rules"; then
-    printf "  ${G}✓  Logging rules present.${R}\n"
+  local med_count=0
+  [ -n "$mediums" ] && med_count=$(echo "$mediums" | grep -c . || true)
+  local total_findings=$(( high_count + med_count ))
+  if [ "$total_findings" -eq 0 ]; then
+    printf "  ${G}✓  No significant issues detected across %d rules.${R}\n" "$total"
   else
-    printf "  ${Y}⚠  No logging rules — consider adding 'log' to firewall rules.${R}\n"; findings=1; fi
-  # Tables (allowlists)
-  if grep -qi "<" <<< "$rules"; then
-    printf "  ${G}✓  IP tables/allowlists in use.${R}\n"; fi
-
-  [ "$findings" -eq 0 ] && printf "  ${G}✓  No critical issues detected.${R}\n"
-  printf "\n  ${D}Run 'killport ports' to cross-reference currently exposed ports.${R}\n\n"
+    printf "  ${RE}%d high${R}  ·  ${Y}%d medium${R}  ·  %d rules OK\n" \
+      "$high_count" "$med_count" "$(( i - total_findings ))"
+    printf "  ${D}Run 'killport openports' to see which ports are reachable from outside.${R}\n"
+  fi
+  printf "\n"
 }
 
 # ── dns ──────────────────────────────────────────────────
