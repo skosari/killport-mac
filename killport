@@ -2970,11 +2970,20 @@ print(json.dumps({'user': sys.argv[1], 'ip': sys.argv[2], 'pubkey': sys.argv[3]}
 
   token_b64=$(printf '%s' "$json" | base64 | tr -d '\n')
 
-  printf "  ${B}Run this on the other Mac:${R}\n\n"
+  printf "  ${B}Run this on the other machine:${R}\n\n"
   printf "  ${C}killport ssh ks:%s${R}\n\n" "$token_b64"
-  printf "  ${D}Then connect from this Mac with:${R}\n"
-  printf "  ${C}ssh -i ~/.killport/id_ed25519 <their-user>@<their-ip>${R}\n\n"
   printf "  ${D}Your IP on this machine: %s${R}\n\n" "$local_ip"
+  printf "  ${D}When they run it, they'll get a return token. Paste it here to save${R}\n"
+  printf "  ${D}the connection and enable SSH in both directions.${R}\n\n"
+  printf "  Return token (ks:...) or Enter to skip → "; read -r _return_token </dev/tty
+  _return_token="${_return_token%$'\r'}"
+  if [[ "$_return_token" == ks:* ]]; then
+    ssh_dispatch "$_return_token"
+  else
+    printf "\n  ${D}Skipped. Once they accept, you can SSH in with:${R}\n"
+    printf "  ${C}ssh -i ~/.killport/id_ed25519 <their-user>@<their-ip>${R}\n\n"
+    printf "  ${D}Or run 'killport ssh' again to exchange tokens.${R}\n\n"
+  fi
 }
 
 # ── Shutdown ──────────────────────────────────────────────────────────────────
@@ -3944,7 +3953,7 @@ if [ $# -eq 0 ]; then
   echo ""
   echo "  *** SSH EASY CONNECT ***"
   echo "  killport qrconnect         show QR code — scan with iPhone app to pair"
-  echo "  killport ssh               generate a token so another Mac can SSH in"
+  echo "  killport ssh               generate a token so another machine can SSH in"
   echo "  killport ssh ks:<token>    accept a token — adds their key, enables SSH"
   echo "  killport ssh list          show all saved SSH connections"
   echo "  killport ssh <name>        ssh to a saved connection using your key"
