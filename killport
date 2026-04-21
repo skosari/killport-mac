@@ -2,7 +2,7 @@
 
 set -euo pipefail
 
-VERSION="1.10.38"
+VERSION="1.10.39"
 REPO="skosari/killport-mac"
 RAW="https://raw.githubusercontent.com/${REPO}/main"
 API="https://api.github.com/repos/${REPO}/contents"
@@ -4113,32 +4113,39 @@ for m in json.load(sys.stdin).get('models',[]): print(m['name'])" 2>/dev/null ||
     done
     printf "\n"
 
-    local _pick
-    printf "  Pick a model [1-%d] → " "${#_names[@]}"
-    read -r _pick </dev/tty
-    _pick="${_pick%$'\r'}"
+    while true; do
+      local _pick
+      printf "  Pick a model [1-%d] → " "${#_names[@]}"
+      read -r _pick </dev/tty
+      _pick="${_pick%$'\r'}"
 
-    if ! [[ "$_pick" =~ ^[0-9]+$ ]] || [ "$_pick" -lt 1 ] || [ "$_pick" -gt "${#_names[@]}" ]; then
-      printf "  ${RE}Invalid selection.${R}\n\n"; return 1
-    fi
+      if ! [[ "$_pick" =~ ^[0-9]+$ ]] || [ "$_pick" -lt 1 ] || [ "$_pick" -gt "${#_names[@]}" ]; then
+        printf "  ${RE}Invalid selection.${R}\n\n"; continue
+      fi
 
-    local _chosen="${_names[$(( _pick - 1 ))]}"
-    local _tier; _tier=$(_code_model_tier "$_chosen")
+      local _chosen="${_names[$(( _pick - 1 ))]}"
+      local _tier; _tier=$(_code_model_tier "$_chosen")
 
-    if [[ "$_tier" == "none" ]]; then
-      printf "\n  ${Y}⚠  '%s' does not support tool calling.${R}\n" "$_chosen"
-      printf "  ${D}opencode needs tool-calling to read/write files and run commands.${R}\n"
-      printf "  ${D}It will work as a chat assistant only.${R}\n\n"
-      printf "  Continue anyway? [y/N] → "; read -r _cont </dev/tty
-      [[ "$_cont" =~ ^[Yy]$ ]] || return 1
-    elif [[ "$_tier" == "limited" ]]; then
-      printf "\n  ${Y}⚠  '%s' has limited tool-calling support.${R}\n" "$_chosen"
-      printf "  ${D}Some opencode features may not work. Consider qwen2.5-coder or qwen3.${R}\n\n"
-      printf "  Continue anyway? [Y/n] → "; read -r _cont </dev/tty
-      [[ "$_cont" =~ ^[Nn]$ ]] && return 1
-    fi
+      if [[ "$_tier" == "none" ]]; then
+        printf "\n  ${Y}⚠  '%s' does not support tool calling.${R}\n" "$_chosen"
+        printf "  ${D}opencode needs tool-calling to read/write files and run commands.${R}\n"
+        printf "  ${D}It will work as a chat assistant only.${R}\n\n"
+        printf "  Continue anyway? [y/N] → "; read -r _cont </dev/tty
+        if [[ ! "$_cont" =~ ^[Yy]$ ]]; then
+          printf "\n"; continue
+        fi
+      elif [[ "$_tier" == "limited" ]]; then
+        printf "\n  ${Y}⚠  '%s' has limited tool-calling support.${R}\n" "$_chosen"
+        printf "  ${D}Some opencode features may not work. Consider qwen2.5-coder or qwen3.${R}\n\n"
+        printf "  Continue anyway? [Y/n] → "; read -r _cont </dev/tty
+        if [[ "$_cont" =~ ^[Nn]$ ]]; then
+          printf "\n"; continue
+        fi
+      fi
 
-    _CODE_MODEL="$_chosen"
+      _CODE_MODEL="$_chosen"
+      break
+    done
   }
 
   # ── install only ─────────────────────────────────────────────────────────────
@@ -4190,12 +4197,20 @@ for m in json.load(sys.stdin).get('models',[]): print(m['name'])" 2>/dev/null ||
       printf "  ${D}opencode needs tool-calling to read/write files and run commands.${R}\n"
       printf "  ${D}It will work as a chat assistant only.${R}\n\n"
       printf "  Continue anyway? [y/N] → "; read -r _cont </dev/tty
-      [[ "$_cont" =~ ^[Yy]$ ]] || return 0
+      if [[ ! "$_cont" =~ ^[Yy]$ ]]; then
+        printf "\n  ${D}Pick a different model:${R}\n"
+        _code_pick_model "$ollama_host" || return 1
+        model="$_CODE_MODEL"; ATTACK_MODEL="$model"; attack_save_conf
+      fi
     elif [[ "$_tier" == "limited" ]]; then
       printf "\n  ${Y}⚠  '%s' has limited tool-calling support.${R}\n" "$model"
       printf "  ${D}Some opencode features may not work. Consider qwen2.5-coder or qwen3.${R}\n\n"
       printf "  Continue anyway? [Y/n] → "; read -r _cont </dev/tty
-      [[ "$_cont" =~ ^[Nn]$ ]] && return 0
+      if [[ "$_cont" =~ ^[Nn]$ ]]; then
+        printf "\n  ${D}Pick a different model:${R}\n"
+        _code_pick_model "$ollama_host" || return 1
+        model="$_CODE_MODEL"; ATTACK_MODEL="$model"; attack_save_conf
+      fi
     fi
   fi
 
