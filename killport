@@ -2,7 +2,7 @@
 
 set -euo pipefail
 
-VERSION="1.10.43"
+VERSION="1.10.44"
 REPO="skosari/killport-mac"
 RAW="https://raw.githubusercontent.com/${REPO}/main"
 API="https://api.github.com/repos/${REPO}/contents"
@@ -4552,6 +4552,10 @@ case "$1" in
   *)
     PORT="$1"
     if ! [[ "$PORT" =~ ^[0-9]+$ ]] || [ "$PORT" -lt 1 ] || [ "$PORT" -gt 65535 ]; then
+      if grep -q "^${PORT}|" "$HOME/.killport/ssh_known" 2>/dev/null; then
+        ssh_dispatch "$PORT"
+        exit 0
+      fi
       echo "Error: '$PORT' is not a valid port number (1–65535)"
       exit 1
     fi
