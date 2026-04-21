@@ -2,7 +2,7 @@
 
 set -euo pipefail
 
-VERSION="1.10.37"
+VERSION="1.10.38"
 REPO="skosari/killport-mac"
 RAW="https://raw.githubusercontent.com/${REPO}/main"
 API="https://api.github.com/repos/${REPO}/contents"
@@ -3984,6 +3984,12 @@ if [ $# -eq 0 ]; then
   echo "  killport vuln <ip:port>      Detect service version + query CVE database"
   echo "  killport stress <ip:port>    Authorized connection flood / stress test"
   echo ""
+  echo "  *** AI CODING ***"
+  echo "  killport code              launch opencode with your saved Ollama config"
+  echo "  killport code <model>      launch opencode with a specific model"
+  echo "  killport code model        pick a model from your Ollama library"
+  echo "  killport code install      install opencode"
+  echo ""
   echo "  *** REQUIRES OLLAMA ***"
   echo "  killport attack <ip>       AI pentest: scan all ports + analysis  (requires Ollama)"
   echo "  killport attack <ip>:port  AI pentest: scan single port + analysis  (requires Ollama)"
@@ -3992,6 +3998,217 @@ if [ $# -eq 0 ]; then
   echo ""
   exit 0
 fi
+
+# ── Code: opencode launcher ───────────────────────────────────────────────────
+
+code_dispatch() {
+  local C=$'\033[0;36m' G=$'\033[0;32m' Y=$'\033[0;33m' RE=$'\033[0;31m'
+  local D=$'\033[2m' B=$'\033[1m' R=$'\033[0m'
+  local subcmd="${1:-}"
+
+  local OC_CONF_DIR="$HOME/.config/opencode"
+  local OC_CONF="$OC_CONF_DIR/opencode.json"
+
+  # ── tool-calling tier for a given model name ─────────────────────────────────
+  # returns: "full" | "limited" | "none"
+  _code_model_tier() {
+    local m; m=$(printf '%s' "$1" | tr '[:upper:]' '[:lower:]')
+    case "$m" in
+      *qwen2.5-coder*|*qwen3*|*qwen3.*|*deepseek-coder*|*deepseek-r1*|*granite-code*) printf "full" ;;
+      *codellama*|*starcoder*|*codegemma*|*gemma3*|*gemma4*|*llama3*) printf "limited" ;;
+      *) printf "none" ;;
+    esac
+  }
+
+  _code_tier_label() {
+    case "$1" in
+      full)    printf "${G}✓ full tool-calling${R}" ;;
+      limited) printf "${Y}⚠ limited tool-calling${R}" ;;
+      *)       printf "${RE}✗ no tool-calling${R}" ;;
+    esac
+  }
+
+  # ── install opencode ─────────────────────────────────────────────────────────
+  _code_install() {
+    printf "\n${B}${C}  Install opencode${R}\n\n"
+    if command -v brew &>/dev/null; then
+      printf "  ${D}Trying: brew install opencode${R}\n\n"
+      brew install opencode && {
+        printf "\n  ${G}✓ opencode installed via Homebrew.${R}\n\n"; return 0
+      }
+    fi
+    if command -v npm &>/dev/null; then
+      printf "  ${D}Trying: npm install -g opencode-ai${R}\n\n"
+      npm install -g opencode-ai && {
+        printf "\n  ${G}✓ opencode installed via npm.${R}\n\n"; return 0
+      }
+    fi
+    printf "  ${RE}✗ Could not auto-install. Install manually:${R}\n\n"
+    printf "  ${C}brew install opencode${R}   ${D}or${R}   ${C}npm install -g opencode-ai${R}\n\n"
+    return 1
+  }
+
+  # ── write ~/.config/opencode/opencode.json ────────────────────────────────────
+  _code_write_conf() {
+    local ollama_host="$1" model="$2"
+    local base_url
+    if [[ "$ollama_host" =~ ^https?:// ]]; then
+      base_url="${ollama_host}/v1"
+    else
+      base_url="http://${ollama_host}/v1"
+    fi
+    mkdir -p "$OC_CONF_DIR"
+    python3 -c "
+import json, sys
+conf_path, base_url, model = sys.argv[1], sys.argv[2], sys.argv[3]
+try:
+    with open(conf_path) as f: conf = json.load(f)
+except Exception: conf = {}
+conf.setdefault('provider', {})
+conf['provider']['ollama'] = {'options': {'baseURL': base_url}, 'models': {model: {}}}
+conf['model'] = 'ollama/' + model
+with open(conf_path, 'w') as f: json.dump(conf, f, indent=2); f.write('\n')
+" "$OC_CONF" "$base_url" "$model" 2>/dev/null || {
+      printf "  ${RE}✗ Failed to write opencode config (python3 required).${R}\n\n"; return 1
+    }
+  }
+
+  # ── interactive model picker ──────────────────────────────────────────────────
+  # sets global _CODE_MODEL on success, returns 1 on failure/cancel
+  _CODE_MODEL=""
+  _code_pick_model() {
+    local ollama_host="$1"
+    local tags_json
+    tags_json=$(curl -sf --max-time 4 "http://${ollama_host}/api/tags" 2>/dev/null || true)
+
+    if [ -z "$tags_json" ]; then
+      printf "\n  ${RE}✗ Cannot reach Ollama at %s${R}\n\n" "$ollama_host"
+      printf "  ${D}Check that Ollama is running: ollama serve${R}\n\n"
+      return 1
+    fi
+
+    local -a _names=()
+    while IFS= read -r _mn; do [ -n "$_mn" ] && _names+=("$_mn"); done \
+      < <(printf '%s' "$tags_json" | python3 -c "
+import json,sys
+for m in json.load(sys.stdin).get('models',[]): print(m['name'])" 2>/dev/null || true)
+
+    if [ "${#_names[@]}" -eq 0 ]; then
+      printf "\n  ${Y}No models found in Ollama.${R}\n\n"
+      printf "  ${D}Pull a coding model first:${R}\n\n"
+      printf "  ${C}ollama pull qwen2.5-coder:7b${R}   ${D}← recommended${R}\n\n"
+      return 1
+    fi
+
+    printf "\n${B}${C}  Available models on %s${R}\n\n" "$ollama_host"
+    printf "  ${D}Best for opencode: qwen2.5-coder, qwen3, deepseek-coder, deepseek-r1${R}\n"
+    printf "  ${D}Requires full tool-calling support to edit files and run commands.${R}\n\n"
+
+    local i=1
+    for _n in "${_names[@]}"; do
+      local _tier; _tier=$(_code_model_tier "$_n")
+      local _label; _label=$(_code_tier_label "$_tier")
+      printf "  ${B}%2d${R}  %-35s  %b\n" "$i" "$_n" "$_label"
+      (( i++ )) || true
+    done
+    printf "\n"
+
+    local _pick
+    printf "  Pick a model [1-%d] → " "${#_names[@]}"
+    read -r _pick </dev/tty
+    _pick="${_pick%$'\r'}"
+
+    if ! [[ "$_pick" =~ ^[0-9]+$ ]] || [ "$_pick" -lt 1 ] || [ "$_pick" -gt "${#_names[@]}" ]; then
+      printf "  ${RE}Invalid selection.${R}\n\n"; return 1
+    fi
+
+    local _chosen="${_names[$(( _pick - 1 ))]}"
+    local _tier; _tier=$(_code_model_tier "$_chosen")
+
+    if [[ "$_tier" == "none" ]]; then
+      printf "\n  ${Y}⚠  '%s' does not support tool calling.${R}\n" "$_chosen"
+      printf "  ${D}opencode needs tool-calling to read/write files and run commands.${R}\n"
+      printf "  ${D}It will work as a chat assistant only.${R}\n\n"
+      printf "  Continue anyway? [y/N] → "; read -r _cont </dev/tty
+      [[ "$_cont" =~ ^[Yy]$ ]] || return 1
+    elif [[ "$_tier" == "limited" ]]; then
+      printf "\n  ${Y}⚠  '%s' has limited tool-calling support.${R}\n" "$_chosen"
+      printf "  ${D}Some opencode features may not work. Consider qwen2.5-coder or qwen3.${R}\n\n"
+      printf "  Continue anyway? [Y/n] → "; read -r _cont </dev/tty
+      [[ "$_cont" =~ ^[Nn]$ ]] && return 1
+    fi
+
+    _CODE_MODEL="$_chosen"
+  }
+
+  # ── install only ─────────────────────────────────────────────────────────────
+  if [[ "$subcmd" == "install" ]]; then
+    _code_install; return
+  fi
+
+  # ── model picker mode ─────────────────────────────────────────────────────────
+  if [[ "$subcmd" == "model" ]]; then
+    attack_load_conf
+    _code_pick_model "$ATTACK_OLLAMA" || return 1
+    printf "\n  ${G}✓ Model set to '%s'${R}\n" "$_CODE_MODEL"
+    printf "  ${D}Run 'killport code' to launch.${R}\n\n"
+    ATTACK_MODEL="$_CODE_MODEL"; attack_save_conf
+    return
+  fi
+
+  # ── check opencode is installed ───────────────────────────────────────────────
+  if ! command -v opencode &>/dev/null; then
+    printf "\n  ${Y}opencode is not installed.${R}\n\n"
+    printf "  Install it now? [Y/n] → "; read -r _inst </dev/tty
+    if [[ ! "$_inst" =~ ^[Nn]$ ]]; then
+      _code_install || return 1
+    else
+      printf "  ${D}Run 'killport code install' when ready.${R}\n\n"; return 1
+    fi
+  fi
+
+  # ── resolve Ollama host + model ───────────────────────────────────────────────
+  attack_load_conf
+  local ollama_host="$ATTACK_OLLAMA"
+  local model="$subcmd"    # may be empty — filled in below
+
+  # if a bare name was passed, use it; otherwise check saved model, else pick
+  if [ -z "$model" ]; then
+    model="$ATTACK_MODEL"
+  fi
+
+  if [ -z "$model" ]; then
+    printf "\n  ${D}No model saved yet — let's pick one.${R}\n"
+    _code_pick_model "$ollama_host" || return 1
+    model="$_CODE_MODEL"
+    ATTACK_MODEL="$model"; attack_save_conf
+  else
+    # named model passed — verify tier and warn if needed
+    local _tier; _tier=$(_code_model_tier "$model")
+    if [[ "$_tier" == "none" ]]; then
+      printf "\n  ${Y}⚠  '%s' does not support tool calling.${R}\n" "$model"
+      printf "  ${D}opencode needs tool-calling to read/write files and run commands.${R}\n"
+      printf "  ${D}It will work as a chat assistant only.${R}\n\n"
+      printf "  Continue anyway? [y/N] → "; read -r _cont </dev/tty
+      [[ "$_cont" =~ ^[Yy]$ ]] || return 0
+    elif [[ "$_tier" == "limited" ]]; then
+      printf "\n  ${Y}⚠  '%s' has limited tool-calling support.${R}\n" "$model"
+      printf "  ${D}Some opencode features may not work. Consider qwen2.5-coder or qwen3.${R}\n\n"
+      printf "  Continue anyway? [Y/n] → "; read -r _cont </dev/tty
+      [[ "$_cont" =~ ^[Nn]$ ]] && return 0
+    fi
+  fi
+
+  # ── write config and launch ───────────────────────────────────────────────────
+  printf "\n  ${G}✓ Configuring opencode${R}\n"
+  printf "  ${D}Ollama:  %s${R}\n" "$ollama_host"
+  printf "  ${D}Model:   %s${R}\n\n" "$model"
+
+  _code_write_conf "$ollama_host" "$model" || return 1
+
+  printf "  ${D}Launching opencode...${R}\n\n"
+  exec opencode
+}
 
 case "$1" in
 
@@ -4053,6 +4270,10 @@ case "$1" in
 
   restart)
     restart_dispatch "${2:-}"
+    ;;
+
+  code)
+    code_dispatch "${2:-}"
     ;;
 
   qrconnect)
