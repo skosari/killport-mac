@@ -2,7 +2,7 @@
 
 set -euo pipefail
 
-VERSION="1.10.45"
+VERSION="1.10.46"
 REPO="skosari/killport-mac"
 RAW="https://raw.githubusercontent.com/${REPO}/main"
 API="https://api.github.com/repos/${REPO}/contents"
@@ -3170,11 +3170,28 @@ shutdown_dispatch() {
       local err; err=$(cat "$err_file")
       if printf '%s' "$err" | grep -qi "permission denied\|publickey\|authentication failed"; then
         if _sd_host_already_trusted "$ip" "$user"; then
-          # Key exchange was already done — retry directly without the token dance
-          printf "  ${Y}Key auth failed — retrying...${R}\n\n"
-          ssh -i "$KEY_FILE" -o ConnectTimeout=5 -o StrictHostKeyChecking=accept-new \
-            "${user}@${ip}" "$cmd" 2>&1 | sed 's/^/  /' || \
-            printf "  ${RE}Still failed. On the remote, re-run: killport ssh ks:<your-token>${R}\n"
+          printf "  ${Y}Key auth failed — the killport SSH key is no longer authorized on %s.${R}\n" "$ip"
+          printf "  ${D}This usually means authorized_keys was changed or the machine was reinstalled.${R}\n\n"
+          local pub_file="${KEY_FILE}.pub"
+          if [[ "$os" != "windows" ]] && command -v ssh-copy-id &>/dev/null; then
+            printf "  ${G}Fix:${R} enter the password for ${C}%s@%s${R} to re-install the killport key:\n\n" "$user" "$ip"
+            if ssh-copy-id -i "$pub_file" -o ConnectTimeout=10 -o StrictHostKeyChecking=accept-new "${user}@${ip}" 2>&1 | sed 's/^/  /'; then
+              printf "\n  ${G}✓ Key installed — retrying shutdown...${R}\n\n"
+              ssh -i "$KEY_FILE" -o ConnectTimeout=5 -o StrictHostKeyChecking=accept-new \
+                "${user}@${ip}" "$cmd" 2>&1 | sed 's/^/  /' || true
+            else
+              printf "\n  ${RE}Key install failed.${R}  Try the token method:\n\n"
+              _sd_show_token "$ip" "$user"
+              ssh -i "$KEY_FILE" -o ConnectTimeout=5 -o StrictHostKeyChecking=accept-new \
+                "${user}@${ip}" "$cmd" 2>&1 | sed 's/^/  /' || \
+                printf "  ${RE}Still failed.${R}\n"
+            fi
+          else
+            _sd_show_token "$ip" "$user"
+            ssh -i "$KEY_FILE" -o ConnectTimeout=5 -o StrictHostKeyChecking=accept-new \
+              "${user}@${ip}" "$cmd" 2>&1 | sed 's/^/  /' || \
+              printf "  ${RE}Still failed — make sure killport ssh ks:<token> was accepted on the remote.${R}\n"
+          fi
         else
           _sd_show_token "$ip" "$user"
           printf "  ${D}Retrying...${R}\n\n"
@@ -3416,10 +3433,28 @@ restart_dispatch() {
       local err; err=$(cat "$err_file")
       if printf '%s' "$err" | grep -qi "permission denied\|publickey\|authentication failed"; then
         if _rs_host_already_trusted "$ip" "$user"; then
-          printf "  ${Y}Key auth failed — retrying...${R}\n\n"
-          ssh -i "$KEY_FILE" -o ConnectTimeout=5 -o StrictHostKeyChecking=accept-new \
-            "${user}@${ip}" "$cmd" 2>&1 | sed 's/^/  /' || \
-            printf "  ${RE}Still failed. On the remote, re-run: killport ssh ks:<your-token>${R}\n"
+          printf "  ${Y}Key auth failed — the killport SSH key is no longer authorized on %s.${R}\n" "$ip"
+          printf "  ${D}This usually means authorized_keys was changed or the machine was reinstalled.${R}\n\n"
+          local pub_file="${KEY_FILE}.pub"
+          if [[ "$os" != "windows" ]] && command -v ssh-copy-id &>/dev/null; then
+            printf "  ${G}Fix:${R} enter the password for ${C}%s@%s${R} to re-install the killport key:\n\n" "$user" "$ip"
+            if ssh-copy-id -i "$pub_file" -o ConnectTimeout=10 -o StrictHostKeyChecking=accept-new "${user}@${ip}" 2>&1 | sed 's/^/  /'; then
+              printf "\n  ${G}✓ Key installed — retrying restart...${R}\n\n"
+              ssh -i "$KEY_FILE" -o ConnectTimeout=5 -o StrictHostKeyChecking=accept-new \
+                "${user}@${ip}" "$cmd" 2>&1 | sed 's/^/  /' || true
+            else
+              printf "\n  ${RE}Key install failed.${R}  Try the token method:\n\n"
+              _rs_show_token "$ip" "$user"
+              ssh -i "$KEY_FILE" -o ConnectTimeout=5 -o StrictHostKeyChecking=accept-new \
+                "${user}@${ip}" "$cmd" 2>&1 | sed 's/^/  /' || \
+                printf "  ${RE}Still failed.${R}\n"
+            fi
+          else
+            _rs_show_token "$ip" "$user"
+            ssh -i "$KEY_FILE" -o ConnectTimeout=5 -o StrictHostKeyChecking=accept-new \
+              "${user}@${ip}" "$cmd" 2>&1 | sed 's/^/  /' || \
+              printf "  ${RE}Still failed — make sure killport ssh ks:<token> was accepted on the remote.${R}\n"
+          fi
         else
           _rs_show_token "$ip" "$user"
           printf "  ${D}Retrying...${R}\n\n"
