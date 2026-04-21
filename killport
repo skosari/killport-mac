@@ -2,7 +2,7 @@
 
 set -euo pipefail
 
-VERSION="1.10.41"
+VERSION="1.10.42"
 REPO="skosari/killport-mac"
 RAW="https://raw.githubusercontent.com/${REPO}/main"
 API="https://api.github.com/repos/${REPO}/contents"
@@ -3795,8 +3795,19 @@ for m in json.load(sys.stdin).get('models',[]): print(m['name'])" 2>/dev/null ||
         _setup_done+=("Ollama · ${SETUP_OLLAMA}")
         (( _setup_score++ )) || true
       else
-        printf "  ${RE}✗ Could not reach Ollama at %s — skipping.${R}\n\n" "$SETUP_OLLAMA"
-        SETUP_OLLAMA=""
+        printf "  ${RE}✗ Could not reach Ollama at %s${R}\n" "$SETUP_OLLAMA"
+        printf "  Save it anyway (machine may be off)? [y/N] → "; read -r _save_anyway </dev/tty
+        _save_anyway="${_save_anyway%$'\r'}"
+        if [[ "$_save_anyway" =~ ^[Yy]$ ]]; then
+          ATTACK_OLLAMA="$SETUP_OLLAMA"; attack_save_conf
+          _ollama_ok=1
+          printf "  ${G}✓ Saved. killport will connect when the machine is back up.${R}\n\n"
+          _setup_done+=("Ollama · ${SETUP_OLLAMA} (saved offline)")
+          (( _setup_score++ )) || true
+        else
+          printf "  ${D}Skipped. Configure later: killport config${R}\n\n"
+          SETUP_OLLAMA=""
+        fi
       fi
     else
       printf "  ${D}Skipped. Configure later: killport config${R}\n\n"
@@ -3985,8 +3996,8 @@ if [ $# -eq 0 ]; then
   fi
   echo ""
   echo "  killport                   show this help"
-  echo "  killport setup             interactive pro setup wizard (Ollama, WoL, SSH, shutdown)"
   echo "  killport config            configure Ollama host and model"
+  echo "  killport setup             interactive pro setup wizard (Ollama, WoL, SSH, shutdown)"
   echo "  killport update            update to the latest version"
   echo "  killport uninstall         remove killport and all firewall rules"
   echo ""
