@@ -4191,6 +4191,7 @@ if [ $# -eq 0 ]; then
   echo "  killport attack <ip>:port  AI pentest: scan single port + analysis  (requires Ollama)"
   echo "  killport attack log        view attack history"
   echo "  killport fix <ip:port>     detect vulns and generate/apply a fix  (requires Ollama)"
+  echo "  killport browser <prompt>  AI browser automation via browser-harness  (requires Ollama)"
   echo ""
   exit 0
 fi
@@ -4424,6 +4425,196 @@ for m in json.load(sys.stdin).get('models',[]): print(m['name'])" 2>/dev/null ||
   exec opencode
 }
 
+# ── browser ──────────────────────────────────────────────
+_browser_ensure_harness() {
+  local C=$'\033[0;36m' G=$'\033[0;32m' Y=$'\033[0;33m' RE=$'\033[0;31m'
+  local D=$'\033[2m' B=$'\033[1m' R=$'\033[0m'
+
+  command -v browser-harness &>/dev/null && return 0
+
+  printf "  ${Y}browser-harness not installed — installing now...${R}\n\n"
+
+  # ensure uv
+  if ! command -v uv &>/dev/null; then
+    printf "  ${D}Installing uv...${R}\n"
+    if command -v brew &>/dev/null; then
+      brew install uv
+    else
+      curl -LsSf https://astral.sh/uv/install.sh | sh
+      export PATH="$HOME/.local/bin:$PATH"
+    fi
+  fi
+
+  local HARNESS_DIR="$HOME/browser-harness"
+  if [ ! -d "$HARNESS_DIR/.git" ]; then
+    printf "  ${D}Cloning browser-harness...${R}\n"
+    git clone https://github.com/browser-use/browser-harness "$HARNESS_DIR"
+  fi
+
+  printf "  ${D}Installing browser-harness via uv...${R}\n"
+  uv tool install -e "$HARNESS_DIR"
+
+  # reload PATH so the new binary is visible
+  export PATH="$(uv tool dir)/bin:$HOME/.local/bin:$PATH"
+
+  if ! command -v browser-harness &>/dev/null; then
+    printf "  ${RE}Install failed — browser-harness still not on PATH.${R}\n"
+    printf "  ${D}Try opening a new terminal and running: killport browser <prompt>${R}\n\n"
+    return 1
+  fi
+
+  printf "  ${G}browser-harness installed.${R}\n\n"
+
+  # first-time browser setup
+  printf "\n${B}${C}  Browser Setup — Connect to Chrome${R}\n"
+  printf "${C}  ────────────────────────────────────────────${R}\n\n"
+  printf "  browser-harness controls your browser via Chrome DevTools Protocol (CDP).\n"
+  printf "  It needs to attach to a running Chrome instance with remote debugging on.\n\n"
+  printf "  ${B}Step 1${R}  ${D}Make sure Google Chrome is open on your Mac.${R}\n\n"
+  printf "  ${B}Step 2${R}  ${D}Chrome will open the tab chrome://inspect/#remote-debugging${R}\n"
+  printf "          ${D}If the Profile Picker appears — select your normal profile.${R}\n\n"
+  printf "  ${B}Step 3${R}  ${D}On that page, check the box:${R}\n"
+  printf "          ${B}☑  Discover network targets${R}\n"
+  printf "          ${D}Then click${R} ${B}Allow${R} ${D}if a permission dialog pops up.${R}\n\n"
+  printf "  ${B}Step 4${R}  ${D}Come back here — setup will complete automatically.${R}\n\n"
+  printf "  ${D}(This only needs to be done once per Chrome profile.)${R}\n\n"
+  browser-harness --setup
+}
+
+browser_run() {
+  local PROMPT="$*"
+  local C=$'\033[0;36m' G=$'\033[0;32m' Y=$'\033[0;33m' RE=$'\033[0;31m'
+  local D=$'\033[2m' B=$'\033[1m' R=$'\033[0m'
+
+  attack_load_conf
+
+  if [ -z "$PROMPT" ]; then
+    printf "\n${B}${C}  killport browser${R}  ${D}AI browser automation${R}\n"
+    printf "${C}  ────────────────────────────────────────────${R}\n\n"
+    printf "  ${B}Usage:${R}  killport browser <prompt>\n\n"
+    printf "  ${D}Examples:${R}\n"
+    printf "    killport browser open google.com and search for pizza\n"
+    printf "    killport browser take a screenshot of github.com/trending\n"
+    printf "    killport browser fill in the login form at 127.0.0.1:3000\n\n"
+
+    # ── status panel ────────────────────────────────────
+    printf "  ${B}Status:${R}\n"
+
+    # browser-harness
+    if command -v browser-harness &>/dev/null; then
+      printf "  ${G}✓${R}  browser-harness  ${D}$(command -v browser-harness)${R}\n"
+    else
+      printf "  ${Y}✗${R}  browser-harness  ${D}not installed${R}\n\n"
+      printf "  Install browser-harness now? [Y/n] → "
+      read -r _ans </dev/tty
+      if [[ "${_ans:-y}" =~ ^[Yy]$ ]]; then
+        printf "\n"
+        _browser_ensure_harness || return 1
+      else
+        printf "  ${D}Skipped. Run: killport browser <prompt> to install when ready.${R}\n"
+      fi
+    fi
+
+    # Ollama host
+    local _host="${ATTACK_OLLAMA:-localhost:11434}"
+    local _model="${ATTACK_MODEL:-}"
+    local _tags
+    _tags=$(curl -sf --max-time 3 "http://${_host}/api/tags" 2>/dev/null || true)
+
+    if [ -n "$_tags" ]; then
+      local _first
+      _first=$(printf '%s' "$_tags" | python3 -c \
+        "import json,sys; d=json.load(sys.stdin); m=d.get('models',[]); print(m[0]['name'] if m else '')" 2>/dev/null || true)
+      local _display="${_model:-${_first}}"
+      printf "  ${G}✓${R}  Ollama  ${D}%s${R}  model: ${B}%s${R}\n" "$_host" "${_display:-none loaded}"
+    else
+      if [ -n "$_model" ]; then
+        printf "  ${Y}✗${R}  Ollama  ${D}configured: %s  model: %s  — unreachable (machine may be off)${R}\n" "$_host" "$_model"
+      else
+        printf "  ${Y}✗${R}  Ollama  ${D}not reachable at %s — run: ollama serve${R}\n" "$_host"
+      fi
+    fi
+
+    printf "\n  ${D}Configure Ollama host/model: killport config${R}\n\n"
+    return 0
+  fi
+
+  printf "\n${B}${C}  Browser${R}  ${D}→ %s${R}\n" "$PROMPT"
+  printf "${C}  ────────────────────────────────────────────${R}\n\n"
+
+  # auto-install browser-harness if missing
+  _browser_ensure_harness || return 1
+
+  # check Ollama
+  printf "  ${D}Connecting to Ollama at %s...${R}\n" "$ATTACK_OLLAMA"
+  local tags_json
+  tags_json=$(curl -sf --max-time 5 "http://${ATTACK_OLLAMA}/api/tags" 2>/dev/null || true)
+  if [ -z "$tags_json" ]; then
+    if [ -n "$ATTACK_MODEL" ]; then
+      printf "  ${RE}Ollama unreachable at http://%s${R}  ${D}(configured model: %s)${R}\n" "$ATTACK_OLLAMA" "$ATTACK_MODEL"
+      printf "  ${D}The machine may be off or Ollama isn't running. Try: ollama serve${R}\n\n"
+    else
+      printf "  ${RE}Ollama not reachable at http://%s${R}\n" "$ATTACK_OLLAMA"
+      printf "  ${D}Run: ollama serve   or configure: killport config${R}\n\n"
+    fi
+    return 1
+  fi
+
+  local MODEL="$ATTACK_MODEL"
+  if [ -z "$MODEL" ]; then
+    MODEL=$(printf '%s' "$tags_json" | python3 -c \
+      "import json,sys; d=json.load(sys.stdin); m=d.get('models',[]); print(m[0]['name'] if m else '')" 2>/dev/null || true)
+  fi
+  if [ -z "$MODEL" ]; then
+    printf "  ${RE}No Ollama model found.${R} Run: ollama pull qwen2.5:14b\n\n"
+    return 1
+  fi
+
+  printf "  ${G}Connected.${R}  ${D}Model: %s${R}\n\n" "$MODEL"
+  printf "  ${D}Generating browser automation code...${R}\n\n"
+
+  local SYSTEM_PROMPT='You are a browser automation expert. Write Python code for browser-harness (a CDP bridge). Available helpers are pre-imported: new_tab(url), goto(url), wait_for_load(), click(selector_or_coords), type_text(text), page_info(), screenshot(), scroll(direction, amount), find_element(selector), get_text(selector), eval_js(code). Rules: always use new_tab() for the FIRST navigation, call wait_for_load() after every navigation, use screenshot() to verify state before clicking. Return ONLY valid Python code — no markdown, no triple backticks, no explanation.'
+
+  local _py
+  _py=$(mktemp "${TMPDIR:-/tmp}/kp_browser.XXXXXX.py")
+
+  local _prompt_esc _system_esc
+  _system_esc=$(printf '%s' "$SYSTEM_PROMPT" | python3 -c 'import json,sys; print(json.dumps(sys.stdin.read())[1:-1])')
+  _prompt_esc=$(printf '%s' "$PROMPT"        | python3 -c 'import json,sys; print(json.dumps(sys.stdin.read())[1:-1])')
+
+  curl -sf --max-time 120 "http://${ATTACK_OLLAMA}/api/generate" \
+    -H "Content-Type: application/json" \
+    -d "{\"model\":\"${MODEL}\",\"prompt\":\"${_system_esc}\\n\\nTask: ${_prompt_esc}\",\"stream\":false}" 2>/dev/null \
+    | python3 -c "import json,sys; d=json.load(sys.stdin); print(d.get('response',''))" > "$_py" 2>/dev/null || true
+
+  # strip any accidental markdown fences
+  python3 - "$_py" <<'PYSTRIP'
+import sys, re, pathlib
+p = pathlib.Path(sys.argv[1])
+txt = p.read_text()
+txt = re.sub(r'^```[^\n]*\n', '', txt, flags=re.MULTILINE)
+txt = re.sub(r'```\s*$', '', txt, flags=re.MULTILINE)
+p.write_text(txt.strip() + '\n')
+PYSTRIP
+
+  printf "  ${B}Generated code:${R}\n"
+  printf "${D}"
+  cat "$_py"
+  printf "${R}\n"
+
+  printf "  ${D}Running via browser-harness...${R}\n\n"
+  browser-harness < "$_py"
+  local _exit=$?
+  rm -f "$_py"
+
+  if [ $_exit -eq 0 ]; then
+    printf "\n  ${G}Done.${R}\n\n"
+  else
+    printf "\n  ${RE}browser-harness exited with code %d${R}\n\n" "$_exit"
+  fi
+  return $_exit
+}
+
 case "$1" in
 
   setup)
@@ -4452,6 +4643,11 @@ case "$1" in
 
   fix)
     fix_dispatch "${2:-}"
+    ;;
+
+  browser)
+    shift
+    browser_run "$@"
     ;;
 
   audit)
@@ -4503,53 +4699,235 @@ case "$1" in
     ;;
 
   uninstall)
-    # Check for saved data
-    _kp_data_files=()
-    for _f in \
-      "$HOME/.config/killport/wol_hosts" \
-      "$HOME/.config/killport/attack.conf" \
-      "$HOME/.config/killport/attack.log" \
-      "$HOME/.killport/ssh_known" \
-      "$HOME/.killport/shutdown_hosts" \
-      "$HOME/.killport/id_ed25519"; do
-      [ -f "$_f" ] && _kp_data_files+=("$_f")
-    done
+    _C=$'\033[0;36m'; _G=$'\033[0;32m'; _Y=$'\033[0;33m'; _RE=$'\033[0;31m'
+    _D=$'\033[2m'; _B=$'\033[1m'; _R=$'\033[0m'
 
-    _keep_data=true
-    if [ ${#_kp_data_files[@]} -gt 0 ]; then
-      printf "\n  Saved data found:\n"
-      for _f in "${_kp_data_files[@]}"; do printf "    %s\n" "$_f"; done
-      printf "\n  Keep saved connections, hosts, and logs? [Y/n] "
-      read -r _ans </dev/tty
-      [ "$(printf '%s' "$_ans" | tr '[:upper:]' '[:lower:]')" = "n" ] && _keep_data=false
+    # secure-erase a file: overwrite then delete
+    _secure_rm() {
+      local _f="$1"
+      [ -f "$_f" ] || return 0
+      if command -v srm &>/dev/null; then
+        srm -f "$_f"
+      else
+        python3 -c "
+import os, pathlib
+p = pathlib.Path('$_f')
+size = p.stat().st_size
+with open(p, 'r+b') as fh:
+    for _ in range(3):
+        fh.seek(0); fh.write(os.urandom(size)); fh.flush(); os.fsync(fh.fileno())
+" 2>/dev/null || true
+        rm -f "$_f"
+      fi
+    }
+
+    _ask() { # _ask "Question" → returns 0 for yes, 1 for no (default: no)
+      printf "%s [y/N] → " "$1"
+      read -r _a </dev/tty
+      [[ "${_a:-n}" =~ ^[Yy]$ ]]
+    }
+
+    printf "\n${_B}${_C}  killport uninstall${_R}\n"
+    printf "${_C}  ────────────────────────────────────────────${_R}\n\n"
+
+    # ── Section 1: Installed tools ───────────────────────────
+    printf "  ${_B}Installed tools${_R}\n\n"
+
+    _tools_remove_browser=false
+    _tools_remove_nmap=false
+    _tools_remove_sshpass=false
+    _tools_remove_hashcat=false
+    _tools_remove_john=false
+    _found_any_tool=false
+
+    if command -v browser-harness &>/dev/null || [ -d "$HOME/browser-harness" ]; then
+      _found_any_tool=true
+      printf "  ${_Y}●${_R}  browser-harness"
+      command -v browser-harness &>/dev/null && printf "  ${_D}%s${_R}" "$(command -v browser-harness)"
+      [ -d "$HOME/browser-harness" ] && printf "  ${_D}+ ~/browser-harness${_R}"
+      printf "\n"
+      _ask "      Uninstall browser-harness?" && _tools_remove_browser=true
       printf "\n"
     fi
 
-    echo "Uninstalling killport..."
-    INSTALL_PATH=$(command -v killport)
-    if [ -f "$INSTALL_PATH" ]; then
-      sudo rm "$INSTALL_PATH"
-      echo "  Removed $INSTALL_PATH"
-    fi
-    if [ -f /etc/pf.anchors/killport ]; then
-      sudo rm /etc/pf.anchors/killport
-      echo "  Removed /etc/pf.anchors/killport"
-    fi
-    if sudo grep -q 'killport' /etc/pf.conf 2>/dev/null; then
-      sudo sed -i '' '/anchor "killport"/d' /etc/pf.conf
-      sudo sed -i '' '/load anchor "killport"/d' /etc/pf.conf
-      sudo pfctl -f /etc/pf.conf 2>/dev/null || true
-      echo "  Cleaned pf.conf"
+    if command -v nmap &>/dev/null && brew list nmap &>/dev/null 2>&1; then
+      _found_any_tool=true
+      printf "  ${_Y}●${_R}  nmap  ${_D}$(command -v nmap)${_R}\n"
+      _ask "      Uninstall nmap?" && _tools_remove_nmap=true
+      printf "\n"
     fi
 
-    if [ "$_keep_data" = false ]; then
-      [ -d "$HOME/.config/killport" ] && rm -rf "$HOME/.config/killport" && echo "  Removed $HOME/.config/killport"
-      [ -d "$HOME/.killport" ]        && rm -rf "$HOME/.killport"        && echo "  Removed $HOME/.killport"
-      echo "killport uninstalled. No trace left."
-    else
-      echo "killport uninstalled."
-      echo "  Your data is preserved — reinstalling will pick it up automatically."
+    if command -v sshpass &>/dev/null && brew list sshpass &>/dev/null 2>&1; then
+      _found_any_tool=true
+      printf "  ${_Y}●${_R}  sshpass  ${_D}$(command -v sshpass)${_R}\n"
+      _ask "      Uninstall sshpass?" && _tools_remove_sshpass=true
+      printf "\n"
     fi
+
+    if command -v hashcat &>/dev/null && brew list hashcat &>/dev/null 2>&1; then
+      _found_any_tool=true
+      printf "  ${_Y}●${_R}  hashcat  ${_D}$(command -v hashcat)${_R}\n"
+      _ask "      Uninstall hashcat?" && _tools_remove_hashcat=true
+      printf "\n"
+    fi
+
+    if command -v john &>/dev/null && brew list john &>/dev/null 2>&1; then
+      _found_any_tool=true
+      printf "  ${_Y}●${_R}  john  ${_D}$(command -v john)${_R}\n"
+      _ask "      Uninstall john?" && _tools_remove_john=true
+      printf "\n"
+    fi
+
+    [ "$_found_any_tool" = false ] && printf "  ${_D}none found${_R}\n\n"
+
+    # ── Section 2: Saved data & config ───────────────────────
+    printf "  ${_B}Saved data & config${_R}\n\n"
+
+    # parallel arrays instead of associative array (bash 3.2 safe)
+    _file_paths=()
+    _file_decisions=()   # "y" or "n" per index
+    _file_sensitive=()   # "1" if needs secure erase
+
+    _print_and_ask_file() {
+      local _label="$1" _path="$2" _note="${3:-}" _sens="${4:-0}"
+      [ -e "$_path" ] || return 0
+      printf "  ${_Y}●${_R}  %-44s${_D}%s${_R}\n" "$_label" "$_note"
+      _file_paths+=("$_path")
+      _file_sensitive+=("$_sens")
+      if [ "$_sens" = "1" ]; then
+        # two-step confirm for sensitive files
+        if _ask "      Delete? (sensitive — requires confirmation)"; then
+          printf "  ${_RE}  This will permanently destroy %s via 3-pass overwrite.${_R}\n" "$_path"
+          if _ask "      Are you sure? This cannot be undone"; then
+            _file_decisions+=("y")
+          else
+            printf "  ${_D}  Kept.${_R}\n"
+            _file_decisions+=("n")
+          fi
+        else
+          _file_decisions+=("n")
+        fi
+      else
+        if _ask "      Delete?"; then
+          _file_decisions+=("y")
+        else
+          _file_decisions+=("n")
+        fi
+      fi
+      printf "\n"
+    }
+
+    _print_and_ask_file "attack.conf  (Ollama host + model)"    "$HOME/.config/killport/attack.conf"
+    _print_and_ask_file "attack.log   (pentest history)"        "$HOME/.config/killport/attack.log"
+    _print_and_ask_file "wol_hosts    (Wake-on-LAN hosts)"      "$HOME/.config/killport/wol_hosts"
+    _print_and_ask_file "ssh_known    (saved SSH connections)"  "$HOME/.killport/ssh_known"
+    _print_and_ask_file "shutdown_hosts"                        "$HOME/.killport/shutdown_hosts"
+    _print_and_ask_file "id_ed25519   (SSH private key)"        "$HOME/.killport/id_ed25519"    "⚠  3-pass secure erase" "1"
+    _print_and_ask_file "id_ed25519.pub"                        "$HOME/.killport/id_ed25519.pub" "⚠  3-pass secure erase" "1"
+
+    _remove_config_dir=false
+    _remove_killport_dir=false
+    if [ -d "$HOME/.config/killport" ]; then
+      _ask "  Remove folder  ~/.config/killport/" && _remove_config_dir=true
+      printf "\n"
+    fi
+    if [ -d "$HOME/.killport" ]; then
+      _ask "  Remove folder  ~/.killport/" && _remove_killport_dir=true
+      printf "\n"
+    fi
+
+    # ── Section 3: System config ─────────────────────────────
+    printf "  ${_B}System config${_R}\n\n"
+    _pf_dirty=false
+    [ -f /etc/pf.anchors/killport ] && { printf "  ${_Y}●${_R}  /etc/pf.anchors/killport\n"; _pf_dirty=true; }
+    sudo grep -q 'killport' /etc/pf.conf 2>/dev/null && { printf "  ${_Y}●${_R}  /etc/pf.conf  ${_D}(killport anchor entries)${_R}\n"; _pf_dirty=true; }
+    if [ "$_pf_dirty" = true ]; then
+      printf "\n"
+      _ask "  Remove firewall rules?" && _clean_pf=true || _clean_pf=false
+    else
+      printf "  ${_D}none found${_R}\n"
+      _clean_pf=false
+    fi
+    printf "\n"
+
+    # ── Summary ──────────────────────────────────────────────
+    printf "  ${_B}Summary — will be removed:${_R}\n\n"
+    _anything_selected=false
+
+    [ "$_tools_remove_browser"  = true ] && { printf "  ${_RE}✕${_R}  browser-harness\n"; _anything_selected=true; }
+    [ "$_tools_remove_nmap"     = true ] && { printf "  ${_RE}✕${_R}  nmap\n";            _anything_selected=true; }
+    [ "$_tools_remove_sshpass"  = true ] && { printf "  ${_RE}✕${_R}  sshpass\n";         _anything_selected=true; }
+    [ "$_tools_remove_hashcat"  = true ] && { printf "  ${_RE}✕${_R}  hashcat\n";         _anything_selected=true; }
+    [ "$_tools_remove_john"     = true ] && { printf "  ${_RE}✕${_R}  john\n";            _anything_selected=true; }
+
+    for _i in "${!_file_paths[@]}"; do
+      if [ "${_file_decisions[$_i]}" = "y" ]; then
+        if [ "${_file_sensitive[$_i]}" = "1" ]; then
+          printf "  ${_RE}✕${_R}  %s  ${_D}(secure erase)${_R}\n" "${_file_paths[$_i]}"
+        else
+          printf "  ${_RE}✕${_R}  %s\n" "${_file_paths[$_i]}"
+        fi
+        _anything_selected=true
+      fi
+    done
+
+    [ "$_remove_config_dir"  = true ] && { printf "  ${_RE}✕${_R}  ~/.config/killport/\n"; _anything_selected=true; }
+    [ "$_remove_killport_dir"= true ] && { printf "  ${_RE}✕${_R}  ~/.killport/\n";        _anything_selected=true; }
+    [ "$_clean_pf"           = true ] && { printf "  ${_RE}✕${_R}  firewall rules\n";      _anything_selected=true; }
+    printf "  ${_RE}✕${_R}  killport  ${_D}%s${_R}\n\n" "$(command -v killport 2>/dev/null || echo '/usr/local/bin/killport')"
+
+    if [ "$_anything_selected" = false ]; then
+      printf "  ${_D}(no tools or data selected — only killport itself will be removed)${_R}\n\n"
+    fi
+
+    _ask "  Proceed?" || { printf "\n  ${_D}Aborted.${_R}\n\n"; exit 0; }
+    printf "\n"
+
+    # ── Execute ──────────────────────────────────────────────
+
+    [ "$_tools_remove_browser" = true ] && {
+      command -v browser-harness &>/dev/null && uv tool uninstall browser-harness 2>/dev/null || true
+      [ -d "$HOME/browser-harness" ] && rm -rf "$HOME/browser-harness" && printf "  Removed ~/browser-harness\n"
+      printf "  Removed browser-harness\n"
+    }
+    [ "$_tools_remove_nmap"    = true ] && brew uninstall --quiet nmap    2>/dev/null && printf "  Removed nmap\n"    || true
+    [ "$_tools_remove_sshpass" = true ] && brew uninstall --quiet sshpass 2>/dev/null && printf "  Removed sshpass\n" || true
+    [ "$_tools_remove_hashcat" = true ] && brew uninstall --quiet hashcat 2>/dev/null && printf "  Removed hashcat\n" || true
+    [ "$_tools_remove_john"    = true ] && brew uninstall --quiet john    2>/dev/null && printf "  Removed john\n"    || true
+
+    for _i in "${!_file_paths[@]}"; do
+      [ "${_file_decisions[$_i]}" = "y" ] || continue
+      _fp="${_file_paths[$_i]}"
+      if [ "${_file_sensitive[$_i]}" = "1" ]; then
+        _secure_rm "$_fp" && printf "  Securely erased %s\n" "$_fp"
+      elif [ -f "$_fp" ]; then
+        rm -f "$_fp" && printf "  Removed %s\n" "$_fp"
+      fi
+    done
+
+    [ "$_remove_config_dir"   = true ] && [ -d "$HOME/.config/killport" ] && rm -rf "$HOME/.config/killport" && printf "  Removed ~/.config/killport\n"
+    [ "$_remove_killport_dir" = true ] && [ -d "$HOME/.killport" ]        && rm -rf "$HOME/.killport"        && printf "  Removed ~/.killport\n"
+
+    # firewall
+    if [ "$_clean_pf" = true ]; then
+      [ -f /etc/pf.anchors/killport ] && sudo rm /etc/pf.anchors/killport && printf "  Removed /etc/pf.anchors/killport\n"
+      sudo grep -q 'killport' /etc/pf.conf 2>/dev/null && {
+        sudo sed -i '' '/anchor "killport"/d' /etc/pf.conf
+        sudo sed -i '' '/load anchor "killport"/d' /etc/pf.conf
+        sudo pfctl -f /etc/pf.conf 2>/dev/null || true
+        printf "  Cleaned /etc/pf.conf\n"
+      }
+    fi
+
+    # killport binary
+    _INSTALL_PATH=$(command -v killport 2>/dev/null || true)
+    if [ -n "$_INSTALL_PATH" ] && [ -f "$_INSTALL_PATH" ]; then
+      if [ -w "$_INSTALL_PATH" ]; then rm "$_INSTALL_PATH"
+      else sudo rm "$_INSTALL_PATH"; fi
+      printf "  Removed %s\n" "$_INSTALL_PATH"
+    fi
+
+    printf "\n  ${_G}Done.${_R}  killport has been uninstalled.\n\n"
     ;;
 
   update)
