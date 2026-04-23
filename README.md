@@ -644,10 +644,11 @@ The token is self-contained — it encodes your public key, username, and IP as 
 **After accepting, the connection is saved by name.** Look it up any time without memorising IPs:
 
 ```sh
-killport ssh list                       # see all saved connections
-killport ssh sams-mbp                   # connect using saved key
-killport ssh sams-mbp 192.168.1.55      # update IP if it changed (no re-pairing needed)
-killport ssh delete sams-mbp            # remove a saved connection
+killport ssh list                          # see all saved connections
+killport ssh sams-mbp                      # connect using saved key
+killport ssh sams-mbp 192.168.1.55         # update IP if it changed (no re-pairing needed)
+killport ssh delete sams-mbp               # remove a saved connection
+killport ssh delete 'sams macbook pro'     # use single quotes for names with spaces
 ```
 
 ```
@@ -670,6 +671,7 @@ killport shutdown 192.168.1.50     # shutdown by IP (prompts OS + user, offers t
 killport shutdown mini             # shutdown a saved host by name
 killport shutdown list             # show all saved hosts
 killport shutdown delete mini      # remove a saved host
+killport shutdown delete 'my htpc' # use single quotes for names with spaces
 
 killport restart                   # scan network and pick a machine to restart
 killport restart 192.168.1.50      # restart by IP

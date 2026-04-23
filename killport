@@ -2915,14 +2915,20 @@ ssh_dispatch() {
       printf "  ${D}Run 'killport ssh ks:<token>' to accept a connection.${R}\n\n"
       return
     fi
-    local count=0
+    local count=0 _ssh_needs_quotes=false _ssh_quote_example=""
     while IFS='|' read -r name ruser rip rdate; do
       [[ -z "$name" || "$name" == \#* ]] && continue
       (( count++ )) || true
+      if [[ "$name" == *" "* && "$_ssh_needs_quotes" == false ]]; then
+        _ssh_needs_quotes=true; _ssh_quote_example="$name"
+      fi
       printf "  ${G}★${R}  ${B}%-20s${R}  ${C}%-14s${R}  ${D}%-16s${R}  %s\n" \
         "$name" "$ruser" "$rip" "$rdate"
     done < "$SSH_KNOWN"
-    printf "\n  ${D}%d connection(s)  ·  'killport ssh <name>' to connect  ·  'killport ssh delete <name>' to remove${R}\n\n" "$count"
+    printf "\n  ${D}%d connection(s)  ·  'killport ssh <name>' to connect  ·  killport ssh delete '<name>' to remove${R}\n" "$count"
+    [[ "$_ssh_needs_quotes" == true ]] && \
+      printf "  ${Y}Names with spaces need single quotes — e.g.: killport ssh delete '%s'${R}\n" "$_ssh_quote_example"
+    printf "\n"
     return
   fi
 
@@ -3233,10 +3239,13 @@ shutdown_dispatch() {
   if [[ "$subcmd" == "list" ]]; then
     printf "\n${B}${C}  Shutdown — Saved Hosts${R}\n"
     printf "${C}  ────────────────────────────────────────────${R}\n\n"
-    local count=0
+    local count=0 _sd_needs_quotes=false _sd_quote_example=""
     while IFS='|' read -r name os ip user date; do
       [[ -z "$name" || "$name" == \#* ]] && continue
       (( count++ )) || true
+      if [[ "$name" == *" "* && "$_sd_needs_quotes" == false ]]; then
+        _sd_needs_quotes=true; _sd_quote_example="$name"
+      fi
       printf "  ${G}★${R}  ${B}%-20s${R}  ${C}%-8s${R}  ${D}%-16s${R}  %-12s  %s\n" \
         "$name" "$os" "$ip" "$user" "$date"
     done < <(_sd_load)
@@ -3244,7 +3253,9 @@ shutdown_dispatch() {
       printf "  ${D}No saved hosts yet.${R}\n"
       printf "  ${D}Run 'killport shutdown <ip>' to add one.${R}\n"
     else
-      printf "\n  ${D}%d host(s)  ·  'killport shutdown <name>' to shut down  ·  'killport shutdown delete <name>' to remove${R}\n" "$count"
+      printf "\n  ${D}%d host(s)  ·  'killport shutdown <name>' to shut down  ·  killport shutdown delete '<name>' to remove${R}\n" "$count"
+      [[ "$_sd_needs_quotes" == true ]] && \
+        printf "  ${Y}Names with spaces need single quotes — e.g.: killport shutdown delete '%s'${R}\n" "$_sd_quote_example"
     fi
     printf "\n"
     return
@@ -4151,6 +4162,7 @@ if [ $# -eq 0 ]; then
   echo "  killport ssh               generate a token so another machine can SSH in"
   echo "  killport ssh ks:<token>    accept a token — adds their key, enables SSH"
   echo "  killport ssh list          show all saved SSH connections"
+  echo "  killport ssh delete <name> remove a saved SSH connection"
   echo "  killport ssh <name>        ssh to a saved connection using your key"
   echo "  killport ssh <name> <ip>   update saved IP (e.g. after DHCP change)"
   echo ""
@@ -4159,12 +4171,14 @@ if [ $# -eq 0 ]; then
   echo "  killport wol <name>        wake a saved host by name"
   echo "  killport wol save <n> <mac> [ip]  save a host for quick wake"
   echo "  killport wol list          show saved WoL hosts"
+  echo "  killport wol delete <name> remove a saved WoL host"
   echo ""
   echo "  *** SHUTDOWN & RESTART ***"
   echo "  killport shutdown          scan network and pick a machine to shut down"
   echo "  killport shutdown <ip>     shut down a remote machine via SSH"
   echo "  killport shutdown <name>   shut down a saved host by name"
   echo "  killport shutdown list     show all saved shutdown hosts"
+  echo "  killport shutdown delete <name>  remove a saved shutdown host"
   echo "  killport restart           scan network and pick a machine to restart"
   echo "  killport restart <ip>      restart a remote machine via SSH"
   echo "  killport restart <name>    restart a saved host by name"
